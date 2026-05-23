@@ -1,4 +1,28 @@
 import type { Bot } from "grammy";
+import { logger } from "../../lib/logger";
+
+interface BinData {
+  scheme?: string;
+  type?: string;
+  brand?: string;
+  prepaid?: boolean;
+  country?: { name?: string; emoji?: string };
+  bank?: { name?: string; city?: string };
+}
+
+async function lookupBin(bin: string): Promise<BinData | null> {
+  try {
+    const res = await fetch(`https://lookup.binlist.net/${bin}`, {
+      headers: { "Accept-Version": "3" },
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) return null;
+    return (await res.json()) as BinData;
+  } catch (err) {
+    logger.warn({ err, bin }, "BIN lookup failed");
+    return null;
+  }
+}
 
 function luhnCheck(num: string): boolean {
   const digits = num.replace(/\D/g, "").split("").reverse().map(Number);
@@ -107,21 +131,38 @@ export function registerCardHandlers(bot: Bot) {
     if (!input || input.length < 6) { await ctx.reply("Usage: /bin XXXXXX (6-digit BIN)"); return; }
 
     const bin = input.replace(/\D/g, "").substring(0, 6);
-    const network = getBinInfo(bin);
-    const firstDigit = bin[0];
 
-    let bank = "Unknown Bank";
-    if (firstDigit === "4") bank = "Visa Issuing Bank";
-    else if (firstDigit === "5") bank = "Mastercard Issuing Bank";
-    else if (firstDigit === "3") bank = "Amex/Diners Issuing Bank";
+    await ctx.reply("🔍 Looking up BIN...");
+
+    const data = await lookupBin(bin);
+
+    if (!data) {
+      await ctx.reply(
+        `🔍 *BIN Lookup*\n\n` +
+          `🏦 BIN: \`${bin}\`\n` +
+          `💳 Scheme: ${getBinInfo(bin)}\n` +
+          `⚠️ No further data found.`,
+        { parse_mode: "Markdown" }
+      );
+      return;
+    }
+
+    const scheme = (data.scheme ?? "Unknown").toUpperCase();
+    const type = (data.type ?? "Unknown").toUpperCase();
+    const brand = (data.brand ?? "Unknown").toUpperCase();
+    const bank = data.bank?.name ? data.bank.name.toUpperCase() : "Unknown";
+    const city = data.bank?.city ?? "";
+    const country = data.country?.name ?? "Unknown";
+    const flag = data.country?.emoji ?? "";
 
     await ctx.reply(
       `🔍 *BIN Lookup*\n\n` +
-        `BIN: \`${bin}\`\n` +
-        `Network: ${network}\n` +
-        `Type: Credit\n` +
-        `Bank: ${bank}\n` +
-        `Country: US`,
+        `🏦 BIN: \`${bin}\`\n` +
+        `💳 Scheme: ${scheme}\n` +
+        `🏦 Type: ${type}\n` +
+        `⭐ Level: ${brand}\n` +
+        `🏛️ Bank: ${bank}${city ? ` — ${city}` : ""}\n` +
+        `🌍 Country: ${flag} ${country}`,
       { parse_mode: "Markdown" }
     );
   });
