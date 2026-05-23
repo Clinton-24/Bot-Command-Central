@@ -1,44 +1,54 @@
-# [Project name]
+# Telegram Bot
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A full-featured Telegram bot with shop, card tools, social scraping, group moderation, and owner commands — powered by Express + grammy + PostgreSQL.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
+- `pnpm --filter @workspace/api-server run dev` — run the API server + bot (port 8080)
 - `pnpm run typecheck` — full typecheck across all packages
 - `pnpm run build` — typecheck + build all packages
 - `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
 - `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
 - Required env: `DATABASE_URL` — Postgres connection string
+- Required secret: `TELEGRAM_BOT_TOKEN` — from @BotFather
+- Required secret: `BOT_OWNER_ID` — your Telegram user ID (for /broadcast, /stats)
 
 ## Stack
 
 - pnpm workspaces, Node.js 24, TypeScript 5.9
 - API: Express 5
+- Bot: grammy (long polling)
 - DB: PostgreSQL + Drizzle ORM
 - Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
 - Build: esbuild (CJS bundle)
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/api-server/src/bot/` — bot entry point and all handlers
+- `artifacts/api-server/src/bot/handlers/` — one file per feature area
+- `lib/db/src/schema/` — DB tables: users, products, orders, group_settings, warnings, blacklist
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Bot runs in long-polling mode alongside Express in the same process
+- grammy is externalized from the esbuild bundle (uses native `platform.node` module)
+- Owner check uses `BOT_OWNER_ID` env var — set it to your Telegram numeric user ID
+- Anti-spam middleware runs on every group message before command handlers
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
-
-## User preferences
-
-_Populate as you build — explicit user instructions worth remembering across sessions._
+- `/buy`, `/order`, `/cancelorder`, `/orders` — product shop with persistent orders
+- `/chk`, `/rzp`, `/bin`, `/gen` — card tools (Luhn check, BIN lookup, card generation)
+- `/fb`, `/insta`, `/snap`, `/pin` — social URL scraper (DM only)
+- `/warn`, `/ban`, `/mute`, `/bl`, `/links`, `/captcha` and more — full group admin suite
+- `/broadcast`, `/stats` — owner-only commands
+- Auto welcome messages, blacklist enforcement, link/forward filtering
 
 ## Gotchas
 
-_Populate as you build — sharp edges, "always run X before Y" rules._
+- After adding new DB tables, run `pnpm --filter @workspace/db run push` then `pnpm run typecheck:libs` before typechecking api-server
+- grammy must stay in `build.mjs` externals — it uses a native binary that can't be bundled
+- `/pin` command conflicts between group admin (pin message) and Pinterest social scraper — Pinterest scraper only fires in private chats
 
 ## Pointers
 
