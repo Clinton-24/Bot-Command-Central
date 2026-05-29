@@ -5,6 +5,8 @@ export interface MeetingDraft {
   title?: string;
   scheduledAt?: string;
   description?: string;
+  chatId?: number;
+  organizerName?: string;
 }
 
 export interface SessionData {

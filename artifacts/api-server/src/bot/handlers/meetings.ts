@@ -98,6 +98,37 @@ const backToMeetingsKb = () =>
     .text("📅 Meetings", "meetings:main")
     .text("🏠 Main Menu", "menu:main");
 
+function buildAnnouncement(
+  meetingId: number,
+  title: string,
+  scheduledAt: Date,
+  description: string | null,
+  organizerName: string
+): string {
+  return (
+    `🔔 *MEETING SCHEDULED*\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `📌 *${title}*\n` +
+    `🕐 ${formatDate(scheduledAt)}\n` +
+    (description ? `📝 ${description}\n` : "") +
+    `\n👤 Organized by: ${organizerName}\n` +
+    `🆔 Meeting #${meetingId}\n\n` +
+    `📢 _All members — please take note!_`
+  );
+}
+
+function startDraft(ctx: BotContext): void {
+  const from = ctx.from;
+  const organizer = from
+    ? (from.first_name + (from.last_name ? ` ${from.last_name}` : ""))
+    : "Unknown";
+  ctx.session.meetingDraft = {
+    chatId: ctx.chat?.id,
+    organizerName: organizer,
+  };
+  ctx.session.pendingAction = "meeting:title";
+}
+
 export async function processMeetingInput(
   ctx: BotContext,
   step: string,
@@ -188,7 +219,8 @@ export async function processMeetingInput(
         `━━━━━━━━━━━━━━━━━━\n\n` +
         `📌 *${title}*\n` +
         `🕐 ${formatDate(scheduledAt)}\n` +
-        (description ? `📝 ${description}` : ""),
+        (description ? `📝 ${description}\n` : "") +
+        `\nConfirm and ring the group?`,
       { parse_mode: "Markdown", reply_markup: confirmKb }
     );
     return;
@@ -197,8 +229,7 @@ export async function processMeetingInput(
 
 export function registerMeetingHandlers(bot: MyBot): void {
   bot.command("schedule", async (ctx) => {
-    ctx.session.meetingDraft = {};
-    ctx.session.pendingAction = "meeting:title";
+    startDraft(ctx);
     await ctx.reply(
       `📅 *NEW MEETING — Step 1/3*\n` +
         `━━━━━━━━━━━━━━━━━━\n\n` +
@@ -225,8 +256,7 @@ export function registerMeetingCallbacks(bot: MyBot): void {
   });
 
   bot.callbackQuery("meetings:schedule", async (ctx) => {
-    ctx.session.meetingDraft = {};
-    ctx.session.pendingAction = "meeting:title";
+    startDraft(ctx);
     await ctx.answerCallbackQuery();
     await ctx.reply(
       `📅 *NEW MEETING — Step 1/3*\n` +
@@ -239,19 +269,21 @@ export function registerMeetingCallbacks(bot: MyBot): void {
   bot.callbackQuery("meetings:confirm", async (ctx) => {
     const draft = ctx.session.meetingDraft;
     const userId = ctx.from.id;
-    const chatId = ctx.chat?.id ?? userId;
 
     if (!draft?.title || !draft.scheduledAt) {
       await ctx.answerCallbackQuery("❌ Session expired. Please start again.");
       return;
     }
 
+    const targetChatId = draft.chatId ?? ctx.chat?.id ?? userId;
+    const organizer = draft.organizerName ?? ctx.from.first_name;
+
     try {
       const [meeting] = await db
         .insert(meetingsTable)
         .values({
           createdBy: userId,
-          chatId,
+          chatId: targetChatId,
           title: draft.title,
           description: draft.description ?? null,
           scheduledAt: new Date(draft.scheduledAt),
@@ -260,7 +292,7 @@ export function registerMeetingCallbacks(bot: MyBot): void {
         .returning();
 
       ctx.session.meetingDraft = undefined;
-      await ctx.answerCallbackQuery("✅ Meeting scheduled!");
+      await ctx.answerCallbackQuery("✅ Meeting scheduled! Ringing group…");
 
       await ctx.editMessageText(
         `✅ *MEETING SCHEDULED!*\n` +
@@ -279,6 +311,24 @@ export function registerMeetingCallbacks(bot: MyBot): void {
             .text("🏠 Main Menu", "menu:main"),
         }
       );
+
+      const announcement = buildAnnouncement(
+        meeting.id,
+        meeting.title,
+        new Date(meeting.scheduledAt),
+        meeting.description,
+        organizer
+      );
+
+      if (targetChatId !== userId) {
+        await ctx.api
+          .sendMessage(targetChatId, announcement, { parse_mode: "Markdown" })
+          .catch((err) => logger.warn({ err, targetChatId }, "Could not announce meeting to group"));
+      } else {
+        await ctx.api
+          .sendMessage(userId, announcement, { parse_mode: "Markdown" })
+          .catch(() => {});
+      }
     } catch (err) {
       logger.error({ err }, "meetings:confirm error");
       await ctx.answerCallbackQuery("❌ Failed to save meeting.");
@@ -390,9 +440,7 @@ export function registerMeetingCallbacks(bot: MyBot): void {
       const [meeting] = await db
         .select()
         .from(meetingsTable)
-        .where(
-          and(eq(meetingsTable.id, meetingId), eq(meetingsTable.createdBy, userId))
-        );
+        .where(and(eq(meetingsTable.id, meetingId), eq(meetingsTable.createdBy, userId)));
 
       if (!meeting) {
         await ctx.reply("❌ Meeting not found.");
@@ -416,6 +464,16 @@ export function registerMeetingCallbacks(bot: MyBot): void {
             .text("🏠 Main Menu", "menu:main"),
         }
       );
+
+      if (meeting.chatId !== userId) {
+        await ctx.api
+          .sendMessage(
+            meeting.chatId,
+            `🚫 *MEETING CANCELLED*\n━━━━━━━━━━━━━━━━━━\n\n📌 *${meeting.title}*\n🕐 ${formatDate(new Date(meeting.scheduledAt))}\n\n_This meeting has been cancelled._`,
+            { parse_mode: "Markdown" }
+          )
+          .catch((err) => logger.warn({ err }, "Could not send cancellation to group"));
+      }
     } catch (err) {
       logger.error({ err }, "meetings:do_cancel error");
       await ctx.reply("❌ Failed to cancel meeting.");
