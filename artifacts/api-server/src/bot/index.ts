@@ -10,6 +10,10 @@ import { registerOwnerHandlers } from "./handlers/owner";
 import { registerWelcomeHandler } from "./handlers/welcome";
 import { registerAntiSpamHandler } from "./handlers/antispam";
 import { registerMeetingHandlers, registerMeetingCallbacks } from "./handlers/meetings";
+import { registerJarvisHandlers, registerJarvisCallbacks } from "./handlers/jarvis";
+import { registerReminderHandlers, startDailyDigestScheduler } from "./handlers/reminders";
+import { registerBatteryHandlers } from "./handlers/battery";
+import { registerEmailHandlers, registerEmailCallbacks } from "./handlers/email";
 
 export type MyBot = Bot<BotContext>;
 
@@ -41,7 +45,15 @@ export function createBot(): MyBot {
   registerAdminCallbacks(bot);
   registerMeetingHandlers(bot);
   registerMeetingCallbacks(bot);
+  registerJarvisHandlers(bot);
+  registerJarvisCallbacks(bot);
+  registerReminderHandlers(bot);
+  registerBatteryHandlers(bot);
+  registerEmailHandlers(bot);
+  registerEmailCallbacks(bot);
   registerOwnerHandlers(bot);
+
+  startDailyDigestScheduler(bot);
 
   bot.catch((err) => {
     logger.error({ err: err.error, update: err.ctx?.update?.update_id }, "Bot error");

@@ -4,17 +4,26 @@ import type { BotContext } from "../context";
 import { processChk, processRzp, processBin, processGen } from "./cards";
 import { processSocial } from "./social";
 import { processMeetingInput } from "./meetings";
+import { handleJarvisMessage } from "./jarvis";
+import { draftEmail } from "./email";
 import { logger } from "../../lib/logger";
+import { isOwner } from "../helpers";
 
-export function mainMenuKeyboard(): InlineKeyboard {
-  return new InlineKeyboard()
+export function mainMenuKeyboard(userId?: number): InlineKeyboard {
+  const kb = new InlineKeyboard()
     .text("🛒 Shop", "menu:shop")
     .text("💳 Card Tools", "menu:cards")
     .row()
     .text("📥 Social Tools", "menu:social")
     .text("📅 Meetings", "menu:meetings")
-    .row()
-    .text("❓ Help", "menu:help");
+    .row();
+
+  if (userId && isOwner(userId)) {
+    kb.text("🤖 Jarvis AI", "menu:jarvis").row();
+  }
+
+  kb.text("❓ Help", "menu:help");
+  return kb;
 }
 
 export async function sendMainMenu(ctx: BotContext): Promise<void> {
@@ -22,7 +31,7 @@ export async function sendMainMenu(ctx: BotContext): Promise<void> {
     `⚡ *BOT PANEL*\n` +
     `━━━━━━━━━━━━━━━━━━\n\n` +
     `Welcome! Select a service:`;
-  const kb = mainMenuKeyboard();
+  const kb = mainMenuKeyboard(ctx.from?.id);
   if (ctx.callbackQuery) {
     await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: kb });
     await ctx.answerCallbackQuery();
@@ -97,6 +106,9 @@ export function registerMenuHandlers(bot: MyBot): void {
         await processSocial(ctx, detail, text);
       } else if (category === "meeting") {
         await processMeetingInput(ctx, detail, text);
+      } else if (category === "jarvis") {
+        if (detail === "input") await handleJarvisMessage(ctx, text);
+        else if (detail === "email") await draftEmail(ctx, text);
       }
     } catch (err) {
       logger.error({ err }, "input interceptor error");
@@ -143,6 +155,7 @@ export function registerMenuHandlers(bot: MyBot): void {
   });
 
   bot.callbackQuery("menu:help", async (ctx) => {
+    const isOwnerUser = ctx.from && isOwner(ctx.from.id);
     const text =
       `❓ *COMMAND REFERENCE*\n` +
       `━━━━━━━━━━━━━━━━━━\n\n` +
@@ -156,6 +169,13 @@ export function registerMenuHandlers(bot: MyBot): void {
       `/fb /insta /snap /pin [URL]\n\n` +
       `📅 *Meetings*\n` +
       `/schedule · /meetings\n\n` +
+      (isOwnerUser
+        ? `🤖 *Jarvis AI (owner)*\n` +
+          `/jarvis · /ai [question]\n` +
+          `/email [brief] · /remind <time> <msg>\n` +
+          `/reminders · /digest · /battery\n` +
+          `/clearai\n\n`
+        : "") +
       `👥 *Group Admin*\n` +
       `/warn · /ban · /mute · /unban · /unmute\n` +
       `/bl · /unbl · /bllist\n` +

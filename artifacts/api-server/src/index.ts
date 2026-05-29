@@ -1,13 +1,12 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { getBotInstance } from "./bot/index";
+import { registerBatteryWebhook } from "./bot/handlers/battery";
 
 const rawPort = process.env["PORT"];
 
 if (!rawPort) {
-  throw new Error(
-    "PORT environment variable is required but was not provided.",
-  );
+  throw new Error("PORT environment variable is required but was not provided.");
 }
 
 const port = Number(rawPort);
@@ -16,16 +15,17 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
+const bot = getBotInstance();
+registerBatteryWebhook(app, bot);
+
 app.listen(port, (err) => {
   if (err) {
     logger.error({ err }, "Error listening on port");
     process.exit(1);
   }
-
   logger.info({ port }, "Server listening");
 });
 
-const bot = getBotInstance();
 bot.start({
   onStart: (info) => {
     logger.info({ username: info.username }, "Telegram bot started");
