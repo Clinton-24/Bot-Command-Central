@@ -9,6 +9,7 @@ import { registerAdminHandlers, registerAdminCallbacks } from "./handlers/admin"
 import { registerOwnerHandlers } from "./handlers/owner";
 import { registerWelcomeHandler } from "./handlers/welcome";
 import { registerAntiSpamHandler } from "./handlers/antispam";
+import { registerMeetingHandlers, registerMeetingCallbacks } from "./handlers/meetings";
 
 export type MyBot = Bot<BotContext>;
 
@@ -38,6 +39,8 @@ export function createBot(): MyBot {
   registerSocialCallbacks(bot);
   registerAdminHandlers(bot);
   registerAdminCallbacks(bot);
+  registerMeetingHandlers(bot);
+  registerMeetingCallbacks(bot);
   registerOwnerHandlers(bot);
 
   bot.catch((err) => {

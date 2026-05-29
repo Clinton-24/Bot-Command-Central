@@ -3,6 +3,7 @@ import type { MyBot } from "../index";
 import type { BotContext } from "../context";
 import { processChk, processRzp, processBin, processGen } from "./cards";
 import { processSocial } from "./social";
+import { processMeetingInput } from "./meetings";
 import { logger } from "../../lib/logger";
 
 export function mainMenuKeyboard(): InlineKeyboard {
@@ -11,6 +12,8 @@ export function mainMenuKeyboard(): InlineKeyboard {
     .text("💳 Card Tools", "menu:cards")
     .row()
     .text("📥 Social Tools", "menu:social")
+    .text("📅 Meetings", "menu:meetings")
+    .row()
     .text("❓ Help", "menu:help");
 }
 
@@ -60,6 +63,16 @@ export function socialMenuKeyboard(): InlineKeyboard {
     .text("🔙 Main Menu", "menu:main");
 }
 
+export function meetingsMenuKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("➕ Schedule Meeting", "meetings:schedule")
+    .row()
+    .text("📋 My Meetings", "meetings:list")
+    .text("❌ Cancel Meeting", "meetings:cancel_pick")
+    .row()
+    .text("🔙 Main Menu", "menu:main");
+}
+
 export function registerMenuHandlers(bot: MyBot): void {
   bot.on("message:text", async (ctx, next) => {
     const text = ctx.message.text.trim();
@@ -71,7 +84,9 @@ export function registerMenuHandlers(bot: MyBot): void {
     ctx.session.pendingAction = undefined;
 
     try {
-      const [category, detail] = pending.split(":");
+      const colonIdx = pending.indexOf(":");
+      const category = colonIdx >= 0 ? pending.slice(0, colonIdx) : pending;
+      const detail = colonIdx >= 0 ? pending.slice(colonIdx + 1) : "";
 
       if (category === "card") {
         if (detail === "chk") await processChk(ctx, text);
@@ -80,6 +95,8 @@ export function registerMenuHandlers(bot: MyBot): void {
         else if (detail === "gen") await processGen(ctx, text);
       } else if (category === "social") {
         await processSocial(ctx, detail, text);
+      } else if (category === "meeting") {
+        await processMeetingInput(ctx, detail, text);
       }
     } catch (err) {
       logger.error({ err }, "input interceptor error");
@@ -117,6 +134,14 @@ export function registerMenuHandlers(bot: MyBot): void {
     await ctx.answerCallbackQuery();
   });
 
+  bot.callbackQuery("menu:meetings", async (ctx) => {
+    await ctx.editMessageText(
+      `📅 *MEETINGS*\n━━━━━━━━━━━━━━━━━━\n\nSchedule and manage meetings.`,
+      { parse_mode: "Markdown", reply_markup: meetingsMenuKeyboard() }
+    );
+    await ctx.answerCallbackQuery();
+  });
+
   bot.callbackQuery("menu:help", async (ctx) => {
     const text =
       `❓ *COMMAND REFERENCE*\n` +
@@ -129,6 +154,8 @@ export function registerMenuHandlers(bot: MyBot): void {
       `/bin XXXXXX · /gen XXXXXX\n\n` +
       `📥 *Social (DM only)*\n` +
       `/fb /insta /snap /pin [URL]\n\n` +
+      `📅 *Meetings*\n` +
+      `/schedule · /meetings\n\n` +
       `👥 *Group Admin*\n` +
       `/warn · /ban · /mute · /unban · /unmute\n` +
       `/bl · /unbl · /bllist\n` +
