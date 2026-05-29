@@ -1,27 +1,88 @@
 import type { Bot } from "grammy";
 import { logger } from "../../lib/logger";
 
-interface BinData {
+interface NormalizedBin {
+  scheme: string;
+  type: string;
+  brand: string;
+  bank: string;
+  country: string;
+  flag: string;
+}
+
+interface HandyApiResponse {
+  Status?: string;
+  Scheme?: string;
+  Type?: string;
+  Issuer?: string;
+  CardTier?: string;
+  Country?: { Name?: string; A2?: string };
+}
+
+interface BinlistResponse {
   scheme?: string;
   type?: string;
   brand?: string;
-  prepaid?: boolean;
   country?: { name?: string; emoji?: string };
-  bank?: { name?: string; city?: string };
+  bank?: { name?: string };
 }
 
-async function lookupBin(bin: string): Promise<BinData | null> {
+const COUNTRY_FLAGS: Record<string, string> = {
+  US: "🇺🇸", GB: "🇬🇧", QA: "🇶🇦", AE: "🇦🇪", SA: "🇸🇦", IN: "🇮🇳",
+  DE: "🇩🇪", FR: "🇫🇷", CN: "🇨🇳", JP: "🇯🇵", RU: "🇷🇺", BR: "🇧🇷",
+  CA: "🇨🇦", AU: "🇦🇺", MX: "🇲🇽", IT: "🇮🇹", ES: "🇪🇸", NL: "🇳🇱",
+  TR: "🇹🇷", KR: "🇰🇷", ID: "🇮🇩", PK: "🇵🇰", NG: "🇳🇬", ZA: "🇿🇦",
+  EG: "🇪🇬", PH: "🇵🇭", TH: "🇹🇭", MY: "🇲🇾", SG: "🇸🇬", KW: "🇰🇼",
+  BH: "🇧🇭", OM: "🇴🇲", JO: "🇯🇴", LB: "🇱🇧", IQ: "🇮🇶", IR: "🇮🇷",
+};
+
+async function lookupBin(bin: string): Promise<NormalizedBin | null> {
+  // Primary: data.handyapi.com — no key, reliable
+  try {
+    const res = await fetch(`https://data.handyapi.com/bin/${bin}`, {
+      signal: AbortSignal.timeout(8000),
+    });
+    if (res.ok) {
+      const d = (await res.json()) as HandyApiResponse;
+      if (d.Status === "SUCCESS") {
+        const a2 = d.Country?.A2 ?? "";
+        return {
+          scheme: (d.Scheme ?? "Unknown").toUpperCase(),
+          type: (d.Type ?? "Unknown").toUpperCase(),
+          brand: (d.CardTier ?? "Unknown").toUpperCase(),
+          bank: (d.Issuer ?? "Unknown").toUpperCase(),
+          country: d.Country?.Name ?? "Unknown",
+          flag: COUNTRY_FLAGS[a2] ?? "🌍",
+        };
+      }
+    }
+  } catch (err) {
+    logger.warn({ err, bin }, "HandyAPI BIN lookup failed, trying fallback");
+  }
+
+  // Fallback: binlist.net
   try {
     const res = await fetch(`https://lookup.binlist.net/${bin}`, {
       headers: { "Accept-Version": "3" },
       signal: AbortSignal.timeout(8000),
     });
-    if (!res.ok) return null;
-    return (await res.json()) as BinData;
+    if (res.ok) {
+      const d = (await res.json()) as BinlistResponse;
+      const a2 = "";
+      return {
+        scheme: (d.scheme ?? "Unknown").toUpperCase(),
+        type: (d.type ?? "Unknown").toUpperCase(),
+        brand: (d.brand ?? "Unknown").toUpperCase(),
+        bank: (d.bank?.name ?? "Unknown").toUpperCase(),
+        country: d.country?.name ?? "Unknown",
+        flag: d.country?.emoji ?? COUNTRY_FLAGS[a2] ?? "🌍",
+      };
+    }
   } catch (err) {
-    logger.warn({ err, bin }, "BIN lookup failed");
-    return null;
+    logger.warn({ err, bin }, "Binlist BIN lookup also failed");
   }
+
+  return null;
 }
 
 function luhnCheck(num: string): boolean {
@@ -141,28 +202,20 @@ export function registerCardHandlers(bot: Bot) {
         `🔍 *BIN Lookup*\n\n` +
           `🏦 BIN: \`${bin}\`\n` +
           `💳 Scheme: ${getBinInfo(bin)}\n` +
-          `⚠️ No further data found.`,
+          `⚠️ No data found for this BIN.`,
         { parse_mode: "Markdown" }
       );
       return;
     }
 
-    const scheme = (data.scheme ?? "Unknown").toUpperCase();
-    const type = (data.type ?? "Unknown").toUpperCase();
-    const brand = (data.brand ?? "Unknown").toUpperCase();
-    const bank = data.bank?.name ? data.bank.name.toUpperCase() : "Unknown";
-    const city = data.bank?.city ?? "";
-    const country = data.country?.name ?? "Unknown";
-    const flag = data.country?.emoji ?? "";
-
     await ctx.reply(
       `🔍 *BIN Lookup*\n\n` +
         `🏦 BIN: \`${bin}\`\n` +
-        `💳 Scheme: ${scheme}\n` +
-        `🏦 Type: ${type}\n` +
-        `⭐ Level: ${brand}\n` +
-        `🏛️ Bank: ${bank}${city ? ` — ${city}` : ""}\n` +
-        `🌍 Country: ${flag} ${country}`,
+        `💳 Scheme: ${data.scheme}\n` +
+        `🏦 Type: ${data.type}\n` +
+        `⭐ Level: ${data.brand}\n` +
+        `🏛️ Bank: ${data.bank}\n` +
+        `🌍 Country: ${data.flag} ${data.country}`,
       { parse_mode: "Markdown" }
     );
   });
