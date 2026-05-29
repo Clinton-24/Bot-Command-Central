@@ -1,54 +1,53 @@
-import { Bot, session, type SessionFlavor, type Context } from "grammy";
+import { Bot, session } from "grammy";
+import type { BotContext, SessionData } from "./context";
 import { logger } from "../lib/logger";
-import { registerShopHandlers } from "./handlers/shop";
-import { registerCardHandlers } from "./handlers/cards";
-import { registerSocialHandlers } from "./handlers/social";
-import { registerAdminHandlers } from "./handlers/admin";
+import { registerMenuHandlers } from "./handlers/menu";
+import { registerShopHandlers, registerShopCallbacks } from "./handlers/shop";
+import { registerCardHandlers, registerCardCallbacks } from "./handlers/cards";
+import { registerSocialHandlers, registerSocialCallbacks } from "./handlers/social";
+import { registerAdminHandlers, registerAdminCallbacks } from "./handlers/admin";
 import { registerOwnerHandlers } from "./handlers/owner";
 import { registerWelcomeHandler } from "./handlers/welcome";
 import { registerAntiSpamHandler } from "./handlers/antispam";
 
-export interface SessionData {
-  step?: string;
-  cart?: { productId: number; quantity: number }[];
-}
+export type MyBot = Bot<BotContext>;
 
-export type BotContext = Context & SessionFlavor<SessionData>;
+let botInstance: MyBot | null = null;
 
-let botInstance: Bot | null = null;
-
-export function createBot(): Bot {
+export function createBot(): MyBot {
   const token = process.env["TELEGRAM_BOT_TOKEN"];
-  if (!token) {
-    throw new Error("TELEGRAM_BOT_TOKEN is not set");
-  }
+  if (!token) throw new Error("TELEGRAM_BOT_TOKEN is not set");
 
-  const bot = new Bot(token);
+  const bot = new Bot<BotContext>(token);
 
   bot.use(
     session({
-      initial: (): SessionData => ({ cart: [] }),
+      initial: (): SessionData => ({}),
+      getSessionKey: (ctx) => ctx.from?.id?.toString(),
     })
   );
 
-  registerWelcomeHandler(bot);
+  registerMenuHandlers(bot);
   registerAntiSpamHandler(bot);
+  registerWelcomeHandler(bot);
   registerShopHandlers(bot);
+  registerShopCallbacks(bot);
   registerCardHandlers(bot);
+  registerCardCallbacks(bot);
   registerSocialHandlers(bot);
+  registerSocialCallbacks(bot);
   registerAdminHandlers(bot);
+  registerAdminCallbacks(bot);
   registerOwnerHandlers(bot);
 
   bot.catch((err) => {
-    logger.error({ err: err.error, ctx: err.ctx?.update?.update_id }, "Bot error");
+    logger.error({ err: err.error, update: err.ctx?.update?.update_id }, "Bot error");
   });
 
   return bot;
 }
 
-export function getBotInstance(): Bot {
-  if (!botInstance) {
-    botInstance = createBot();
-  }
+export function getBotInstance(): MyBot {
+  if (!botInstance) botInstance = createBot();
   return botInstance;
 }

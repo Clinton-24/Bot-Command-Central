@@ -1,10 +1,11 @@
-import type { Bot } from "grammy";
+import type { MyBot } from "../index";
+import { sendMainMenu } from "./menu";
 import { db } from "@workspace/db";
 import { usersTable, groupSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "../../lib/logger";
 
-export function registerWelcomeHandler(bot: Bot) {
+export function registerWelcomeHandler(bot: MyBot): void {
   bot.on("message:new_chat_members", async (ctx) => {
     const chatId = ctx.chat.id;
     const newMembers = ctx.message.new_chat_members;
@@ -17,7 +18,6 @@ export function registerWelcomeHandler(bot: Bot) {
 
       for (const member of newMembers) {
         if (member.is_bot) continue;
-
         await db
           .insert(usersTable)
           .values({
@@ -34,7 +34,6 @@ export function registerWelcomeHandler(bot: Bot) {
           const msg = settings.welcomeMessage
             .replace("{name}", name)
             .replace("{username}", username);
-
           await ctx.reply(msg, { parse_mode: "Markdown" }).catch(() => {});
         }
       }
@@ -61,42 +60,29 @@ export function registerWelcomeHandler(bot: Bot) {
       logger.error({ err }, "start: failed to save user");
     }
 
-    await ctx.reply(
-      `👋 *Welcome!*\n\n` +
-        `I'm your all-in-one group management and tools bot.\n\n` +
-        `⚡ *Commands*\n\n` +
-        `🛒 *Shop*\n` +
-        `/buy — Browse products\n` +
-        `/orders — Your order history\n` +
-        `/cancelorder — Cancel active order\n\n` +
-        `💳 *Card Tools*\n` +
-        `/chk CARD|MM|YY|CVV\n` +
-        `/rzp CARD|MM|YY|CVV\n` +
-        `/bin XXXXXX\n` +
-        `/gen XXXXXX\n\n` +
-        `📥 *Social (DM only)*\n` +
-        `/fb /insta /snap /pin [URL]\n\n` +
-        `👥 *Group Admin*\n` +
-        `/warn /ban /mute /bl and more\n\n` +
-        `Type /help for the full command list.`,
-      { parse_mode: "Markdown" }
-    );
+    await sendMainMenu(ctx);
+  });
+
+  bot.command("menu", async (ctx) => {
+    await sendMainMenu(ctx);
   });
 
   bot.command("help", async (ctx) => {
     await ctx.reply(
-      `⚡ *Full Command List*\n\n` +
+      `⚡ *FULL COMMAND LIST*\n` +
+        `━━━━━━━━━━━━━━━━━━\n\n` +
         `🛒 *SHOP*\n` +
-        `/buy — Purchase a product\n` +
-        `/cancelorder — Cancel your active order\n` +
-        `/orders — Your order history\n\n` +
+        `/buy — Browse products\n` +
+        `/order <id> — Place an order\n` +
+        `/cancelorder — Cancel active order\n` +
+        `/orders — Order history\n\n` +
         `💳 *CARD TOOLS (free)*\n` +
         `/chk CARD|MM|YY|CVV\n` +
         `/rzp CARD|MM|YY|CVV\n` +
         `/bin XXXXXX\n` +
         `/gen XXXXXX\n\n` +
         `📥 *SOCIAL (DM only)*\n` +
-        `/fb [URL] · /insta [URL] · /snap [URL] · /pin [URL]\n\n` +
+        `/fb /insta /snap /pin [URL]\n\n` +
         `👥 *GROUP ADMIN*\n` +
         `/warn · /warnings · /resetwarns (reply)\n` +
         `/ban · /unban (reply)\n` +
