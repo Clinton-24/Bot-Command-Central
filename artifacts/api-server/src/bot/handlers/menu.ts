@@ -6,12 +6,13 @@ import { processSocial } from "./social";
 import { processMeetingInput } from "./meetings";
 import { handleJarvisMessage } from "./jarvis";
 import { draftEmail } from "./email";
+import { processHexInput } from "./hex";
 import { logger } from "../../lib/logger";
 import { isOwner } from "../helpers";
 
 export function mainMenuKeyboard(userId?: number): InlineKeyboard {
   const kb = new InlineKeyboard()
-    .text("🛒 Shop", "menu:shop")
+    .text("🛍️ CardShop", "cardshop:main")
     .text("💳 Card Tools", "menu:cards")
     .row()
     .text("📥 Social Tools", "menu:social")
@@ -19,7 +20,9 @@ export function mainMenuKeyboard(userId?: number): InlineKeyboard {
     .row();
 
   if (userId && isOwner(userId)) {
-    kb.text("🤖 Jarvis AI", "menu:jarvis").row();
+    kb.text("🤖 Jarvis AI", "menu:jarvis")
+      .text("🔮 Hex Panel", "hex:main")
+      .row();
   }
 
   kb.text("❓ Help", "menu:help");
@@ -109,6 +112,9 @@ export function registerMenuHandlers(bot: MyBot): void {
       } else if (category === "jarvis") {
         if (detail === "input") await handleJarvisMessage(ctx, text);
         else if (detail === "email") await draftEmail(ctx, text);
+      } else if (pending.startsWith("hex:")) {
+        ctx.session.pendingAction = pending; // restore before handler (it may set a new one)
+        await processHexInput(ctx, pending, text);
       }
     } catch (err) {
       logger.error({ err }, "input interceptor error");

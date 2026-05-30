@@ -14,6 +14,8 @@ import { registerJarvisHandlers, registerJarvisCallbacks } from "./handlers/jarv
 import { registerReminderHandlers, startDailyDigestScheduler } from "./handlers/reminders";
 import { registerBatteryHandlers } from "./handlers/battery";
 import { registerEmailHandlers, registerEmailCallbacks } from "./handlers/email";
+import { registerHexHandlers, registerHexCallbacks } from "./handlers/hex";
+import { registerCardShopHandlers, registerCardShopCallbacks } from "./handlers/cardshop";
 
 export type MyBot = Bot<BotContext>;
 
@@ -51,6 +53,10 @@ export function createBot(): MyBot {
   registerBatteryHandlers(bot);
   registerEmailHandlers(bot);
   registerEmailCallbacks(bot);
+  registerCardShopHandlers(bot);
+  registerCardShopCallbacks(bot);
+  registerHexHandlers(bot);
+  registerHexCallbacks(bot);
   registerOwnerHandlers(bot);
 
   startDailyDigestScheduler(bot);

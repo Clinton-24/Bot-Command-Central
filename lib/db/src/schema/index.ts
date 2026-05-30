@@ -5,3 +5,5 @@ export * from "./group_settings";
 export * from "./warnings";
 export * from "./blacklist";
 export * from "./meetings";
+export * from "./payment_settings";
+export * from "./payment_requests";
