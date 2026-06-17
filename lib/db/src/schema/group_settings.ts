@@ -9,6 +9,7 @@ export const groupSettingsTable = pgTable("group_settings", {
   captchaEnabled: boolean("captcha_enabled").notNull().default(false),
   antispamEnabled: boolean("antispam_enabled").notNull().default(false),
   welcomeMessage: text("welcome_message"),
+  groupRules: text("group_rules"),
   logChannelId: bigint("log_channel_id", { mode: "number" }),
   updatedAt: timestamp("updated_at").notNull().defaultNow(),
 });
