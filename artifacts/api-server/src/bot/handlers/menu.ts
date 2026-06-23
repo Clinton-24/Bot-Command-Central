@@ -53,6 +53,14 @@ export function shopMenuKeyboard(): InlineKeyboard {
     .text("🔙 Main Menu", "menu:main");
 }
 
+export function cardShopRedirectKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("🛍️ Open CardShop", "cardshop:main")
+    .row()
+    .text("📋 My Orders", "cardshop:myorders")
+    .text("🏠 Main Menu", "menu:main");
+}
+
 export function cardMenuKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text("✅ CHK Card", "cards:chk")
@@ -126,10 +134,11 @@ export function registerMenuHandlers(bot: MyBot): void {
     await sendMainMenu(ctx);
   });
 
+  // Legacy shop callback — redirect to new CardShop
   bot.callbackQuery("menu:shop", async (ctx) => {
     await ctx.editMessageText(
-      `🛒 *SHOP*\n━━━━━━━━━━━━━━━━━━\n\nBrowse products and manage your orders.`,
-      { parse_mode: "Markdown", reply_markup: shopMenuKeyboard() }
+      `🛍️ *CARDSHOP*\n━━━━━━━━━━━━━━━━━━\n\nBrowse and buy digital products.`,
+      { parse_mode: "Markdown", reply_markup: cardShopRedirectKeyboard() }
     );
     await ctx.answerCallbackQuery();
   });

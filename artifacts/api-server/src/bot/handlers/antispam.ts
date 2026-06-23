@@ -1,12 +1,12 @@
-import type { Bot } from "grammy";
 import { db } from "@workspace/db";
 import { blacklistTable, groupSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "../../lib/logger";
+import type { MyBot } from "../index";
 
 const URL_REGEX = /https?:\/\/[^\s]+|t\.me\/[^\s]+/gi;
 
-export function registerAntiSpamHandler(bot: Bot) {
+export function registerAntiSpamHandler(bot: MyBot): void {
   bot.on("message", async (ctx, next) => {
     const chat = ctx.chat;
     if (!chat || chat.type === "private") return next();

@@ -185,37 +185,39 @@ export function registerWelcomeHandler(bot: MyBot): void {
     await ctx.reply(
       `⚡ *FULL COMMAND LIST*\n` +
         `━━━━━━━━━━━━━━━━━━\n\n` +
-        `🛒 *SHOP*\n` +
-        `/shop — Browse CardShop\n` +
-        `/buy — Browse products\n` +
-        `/order <id> — Place an order\n` +
-        `/cancelorder — Cancel active order\n` +
-        `/orders — Order history\n\n` +
+        `🛍️ *CARDSHOP*\n` +
+        `/shop — Open the CardShop\n` +
+        `/myorders — View your orders\n\n` +
         `💳 *CARD TOOLS (free)*\n` +
-        `/chk CARD|MM|YY|CVV\n` +
-        `/rzp CARD|MM|YY|CVV\n` +
-        `/bin XXXXXX\n` +
-        `/gen XXXXXX\n\n` +
-        `📥 *SOCIAL (DM only)*\n` +
-        `/fb /insta /snap /pin [URL]\n\n` +
+        `/chk CARD|MM|YY|CVV — Luhn check\n` +
+        `/rzp CARD|MM|YY|CVV — RZP check\n` +
+        `/bin XXXXXX — BIN lookup\n` +
+        `/gen XXXXXX — Generate cards\n\n` +
+        `📥 *SOCIAL SCRAPER (DM only)*\n` +
+        `/fb [URL] /insta [URL] /snap [URL] /pin [URL]\n\n` +
         `👥 *GROUP ADMIN*\n` +
-        `/warn · /warnings · /resetwarns (reply)\n` +
-        `/unwarn (reply) — Remove one warning\n` +
-        `/ban · /unban (reply)\n` +
-        `/mute · /unmute (reply)\n` +
-        `/mutetime <duration> (reply) — e.g. 1h, 30m, 1d\n` +
+        `/warn · /warnings · /resetwarns (reply to user)\n` +
+        `/ban · /unban · /mute · /unmute (reply to user)\n` +
+        `/mutetime <1h|30m|1d> (reply to user)\n` +
         `/bl word · /unbl word · /bllist\n` +
         `/links on|off · /forwards on|off\n` +
         `/captcha on|off · /antispam on|off\n` +
         `/setwelcome [msg] · /setrules [rules]\n` +
         `/pin · /unpin · /settings · /logs\n\n` +
         `🛠️ *GENERAL*\n` +
-        `/ping — Check bot status\n` +
-        `/id — Your Telegram ID\n` +
-        `/report <reason> — Report an issue\n\n` +
+        `/ping — Latency check\n` +
+        `/id — Your Telegram ID & chat info\n` +
+        `/report <reason> — Report to admin\n\n` +
         `📢 *OWNER ONLY*\n` +
         `/broadcast [msg] · /stats · /hex`,
-      { parse_mode: "Markdown" }
+      {
+        parse_mode: "Markdown",
+        reply_markup: new InlineKeyboard()
+          .text("🛍️ CardShop", "cardshop:main")
+          .text("💳 Card Tools", "menu:cards")
+          .row()
+          .text("🏠 Main Menu", "menu:main"),
+      }
     );
   });
 }

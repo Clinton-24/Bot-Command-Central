@@ -1,0 +1,2 @@
+- [409 conflict fix](409-conflict.md) — grammy 409 on restart: handled by auto-retry in index.ts; wait 35s per attempt before next poll.
+- [grammy externals](grammy-externals.md) — grammy must stay in build.mjs externals or native binary bundling breaks.

@@ -10,11 +10,60 @@ const backToShopKb = () =>
   new InlineKeyboard().text("🔙 Back to Shop", "menu:shop").text("🏠 Main Menu", "menu:main");
 
 export function registerShopHandlers(bot: MyBot): void {
+  // /buy → redirect to the new CardShop
   bot.command("buy", async (ctx) => {
     await ctx.reply(
-      `🛒 *SHOP*\n━━━━━━━━━━━━━━━━━━\n\nBrowse products and manage your orders.`,
-      { parse_mode: "Markdown", reply_markup: shopMenuKeyboard() }
+      `🛍️ *CARDSHOP*\n━━━━━━━━━━━━━━━━━━\n\nUse the new CardShop to browse and buy with crypto payments.`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: new InlineKeyboard()
+          .text("🛍️ Open CardShop", "cardshop:main")
+          .text("🏠 Main Menu", "menu:main"),
+      }
     );
+  });
+
+  // /myorders → shortcut for customers
+  bot.command("myorders", async (ctx) => {
+    const userId = ctx.from?.id;
+    if (!userId) return;
+    try {
+      const orders = await db
+        .select()
+        .from(ordersTable)
+        .where(eq(ordersTable.userId, userId))
+        .orderBy(ordersTable.createdAt);
+
+      if (orders.length === 0) {
+        await ctx.reply("📋 You have no orders yet.", {
+          reply_markup: new InlineKeyboard()
+            .text("🛍️ Browse CardShop", "cardshop:main")
+            .text("🏠 Main Menu", "menu:main"),
+        });
+        return;
+      }
+
+      const statusEmoji: Record<string, string> = {
+        pending: "⏳", claimed: "🔔", confirmed: "✅", cancelled: "❌",
+      };
+
+      const kb = new InlineKeyboard();
+      const lines: string[] = [];
+      for (const o of orders.slice(-10)) {
+        const se = statusEmoji[o.status] ?? "❓";
+        lines.push(`${se} *#${o.id}* — ${o.status.toUpperCase()} · ${o.createdAt.toLocaleDateString()}`);
+        kb.text(`${se} #${o.id}`, `cardshop:myorder:${o.id}`).row();
+      }
+      kb.text("🛍️ Shop", "cardshop:main");
+
+      await ctx.reply(
+        `📋 *MY ORDERS*\n━━━━━━━━━━━━━━━━━━\n\n${lines.join("\n")}`,
+        { parse_mode: "Markdown", reply_markup: kb }
+      );
+    } catch (err) {
+      logger.error({ err }, "myorders command error");
+      await ctx.reply("❌ Failed to load orders.");
+    }
   });
 
   bot.command("order", async (ctx) => {
