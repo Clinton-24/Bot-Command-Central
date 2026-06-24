@@ -58,3 +58,9 @@ app.listen(port, async (err?: Error) => {
     logger.error({ err }, "Failed to set Telegram webhook");
   }
 });
+
+// === Keep-alive to prevent Render hibernation ===
+setInterval(() => {
+  fetch(`http://localhost:${port}/`)
+    .catch(() => {}); // silent fail
+}, 5 * 60 * 1000); // every 5 minutes
