@@ -13,14 +13,27 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-const WEBHOOK_URL = process.env["WEBHOOK_URL"];
-if (!WEBHOOK_URL) {
-  throw new Error("WEBHOOK_URL environment variable is required but was not provided.");
-}
+// Improved webhook URL handling
+const getWebhookUrl = (): string => {
+  const webhookPath = "/bot";
+
+  if (process.env.RENDER_EXTERNAL_URL) {
+    // Render automatically provides the correct external URL
+    const base = process.env.RENDER_EXTERNAL_URL.replace(/\/$/, "");
+    return `${base}${webhookPath}`;
+  }
+
+  if (process.env.WEBHOOK_URL) {
+    // Fallback / local development
+    const base = process.env.WEBHOOK_URL.replace(/\/bot?$/, "").replace(/\/$/, "");
+    return `${base}${webhookPath}`;
+  }
+
+  return `http://localhost:${port}${webhookPath}`;
+};
 
 const bot = getBotInstance();
 registerBatteryWebhook(app, bot);
-
 app.post("/bot", webhookCallback(bot, "express"));
 
 app.listen(port, async (err?: Error) => {
@@ -28,16 +41,20 @@ app.listen(port, async (err?: Error) => {
     logger.error({ err }, "Error listening on port");
     process.exit(1);
   }
+
   logger.info({ port }, "Server listening");
 
+  const webhookUrl = getWebhookUrl();
+  logger.info({ url: webhookUrl }, "Setting Telegram webhook to");
+
   try {
-    await bot.api.setWebhook(`${WEBHOOK_URL}/bot`, {
+    await bot.api.setWebhook(webhookUrl, {
       drop_pending_updates: true,
     });
+
     const info = await bot.api.getWebhookInfo();
     logger.info({ url: info.url }, "Telegram webhook set");
   } catch (err) {
     logger.error({ err }, "Failed to set Telegram webhook");
-    process.exit(1);
   }
 });
