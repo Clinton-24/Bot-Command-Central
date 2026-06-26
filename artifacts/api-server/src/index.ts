@@ -3,51 +3,93 @@ import { logger } from "./lib/logger";
 import { getBotInstance } from "./bot/index";
 import { registerBatteryWebhook } from "./bot/handlers/battery";
 import { webhookCallback } from "grammy";
+import { Pool } from 'pg';
+import nodemailer from 'nodemailer';
+import cron from 'node-cron';
 
 const rawPort = process.env["PORT"];
-if (!rawPort) {
-  throw new Error("PORT environment variable is required but was not provided.");
-}
+if (!rawPort) throw new Error("PORT environment variable is required");
 const port = Number(rawPort);
-if (Number.isNaN(port) || port <= 0) {
-  throw new Error(`Invalid PORT value: "${rawPort}"`);
-}
 
-// Improved webhook URL handling
-const getWebhookUrl = (): string => {
-  const webhookPath = "/bot";
+const DATABASE_URL = process.env.DATABASE_URL;
+const pool = DATABASE_URL ? new Pool({ 
+  connectionString: DATABASE_URL, 
+  ssl: true 
+}) : null;
 
-  if (process.env.RENDER_EXTERNAL_URL) {
-    const base = process.env.RENDER_EXTERNAL_URL.replace(/\/$/, "");
-    return `${base}${webhookPath}`;
-  }
-
-  if (process.env.WEBHOOK_URL) {
-    const base = process.env.WEBHOOK_URL.replace(/\/bot?$/, "").replace(/\/$/, "");
-    return `${base}${webhookPath}`;
-  }
-
-  return `http://localhost:${port}${webhookPath}`;
-};
+// Email transporter
+const transporter = nodemailer.createTransport({
+  host: "smtp.atomicmail.com",
+  port: 587,
+  secure: false,
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
 
 const bot = getBotInstance();
 registerBatteryWebhook(app, bot);
 app.post("/bot", webhookCallback(bot, "express"));
 
-// === Health check route for UptimeRobot ===
+// Health check route
 app.get("/health", (req, res) => {
-  res.status(200).json({ 
-    status: "ok", 
-    uptime: process.uptime(),
-    timestamp: new Date().toISOString()
-  });
+  res.status(200).json({ status: "ok", uptime: process.uptime() });
 });
 
-// === Keep-alive to prevent Render hibernation ===
+// Database Health Check
+async function runDatabaseHealthCheck() {
+  if (!pool) {
+    logger.warn("Database monitoring skipped - no DATABASE_URL");
+    return;
+  }
+
+  try {
+    const client = await pool.connect();
+
+    const sizeRes = await client.query(`
+      SELECT pg_size_pretty(pg_database_size(current_database())) as size,
+             pg_database_size(current_database())::float / (1024*1024*1024) as size_gb
+    `);
+
+    const size = sizeRes.rows[0].size;
+    const sizeGb = parseFloat(sizeRes.rows[0].size_gb || 0);
+
+    client.release();
+
+    const report = `
+🗄️ **Daily Database Report** — ${new Date().toDateString()}
+
+📊 Storage Used: ${size} (${sizeGb.toFixed(2)} GB)
+${sizeGb > 8 ? '⚠️ **WARNING**: Database storage is getting full!' : '✅ Storage looks healthy'}
+
+🔍 More checks coming soon...
+    `.trim();
+
+    await bot.api.sendMessage("8600917448", report);
+
+    if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
+      await transporter.sendMail({
+        from: process.env.EMAIL_USER,
+        to: "Nullryns@atomicmail.com",
+        subject: `📊 Database Report - ${new Date().toDateString()}`,
+        text: report,
+      });
+    }
+
+    logger.info("✅ Daily database report sent");
+  } catch (err) {
+    logger.error({ err }, "❌ Database health check failed");
+  }
+}
+
+// Schedule daily at 8:00 AM Nairobi time
+cron.schedule('0 8 * * *', runDatabaseHealthCheck, { timezone: "Africa/Nairobi" });
+
+// Keep-alive
 setInterval(() => {
-  fetch(`http://localhost:${port}/health`)
-    .catch(() => {}); // silent fail
-}, 5 * 60 * 1000); // every 5 minutes
+  fetch(`http://localhost:${port}/health`).catch(() => {});
+}, 5 * 60 * 1000);
 
 app.listen(port, async (err?: Error) => {
   if (err) {
@@ -57,16 +99,16 @@ app.listen(port, async (err?: Error) => {
 
   logger.info({ port }, "Server listening");
 
-  const webhookUrl = getWebhookUrl();
-  logger.info({ url: webhookUrl }, "Setting Telegram webhook to");
+  const webhookUrl = process.env.RENDER_EXTERNAL_URL 
+    ? `${process.env.RENDER_EXTERNAL_URL.replace(/\/$/, '')}/bot`
+    : `http://localhost:${port}/bot`;
 
   try {
-    await bot.api.setWebhook(webhookUrl, {
-      drop_pending_updates: true,
-    });
-    const info = await bot.api.getWebhookInfo();
-    logger.info({ url: info.url }, "Telegram webhook set");
+    await bot.api.setWebhook(webhookUrl, { drop_pending_updates: true });
+    logger.info({ url: webhookUrl }, "Telegram webhook set");
   } catch (err) {
     logger.error({ err }, "Failed to set Telegram webhook");
   }
+
+  setTimeout(runDatabaseHealthCheck, 10000);
 });
