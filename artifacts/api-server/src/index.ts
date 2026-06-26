@@ -18,13 +18,11 @@ const getWebhookUrl = (): string => {
   const webhookPath = "/bot";
 
   if (process.env.RENDER_EXTERNAL_URL) {
-    // Render automatically provides the correct external URL
     const base = process.env.RENDER_EXTERNAL_URL.replace(/\/$/, "");
     return `${base}${webhookPath}`;
   }
 
   if (process.env.WEBHOOK_URL) {
-    // Fallback / local development
     const base = process.env.WEBHOOK_URL.replace(/\/bot?$/, "").replace(/\/$/, "");
     return `${base}${webhookPath}`;
   }
@@ -35,6 +33,21 @@ const getWebhookUrl = (): string => {
 const bot = getBotInstance();
 registerBatteryWebhook(app, bot);
 app.post("/bot", webhookCallback(bot, "express"));
+
+// === Health check route for UptimeRobot ===
+app.get("/health", (req, res) => {
+  res.status(200).json({ 
+    status: "ok", 
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  });
+});
+
+// === Keep-alive to prevent Render hibernation ===
+setInterval(() => {
+  fetch(`http://localhost:${port}/health`)
+    .catch(() => {}); // silent fail
+}, 5 * 60 * 1000); // every 5 minutes
 
 app.listen(port, async (err?: Error) => {
   if (err) {
@@ -51,19 +64,9 @@ app.listen(port, async (err?: Error) => {
     await bot.api.setWebhook(webhookUrl, {
       drop_pending_updates: true,
     });
-
     const info = await bot.api.getWebhookInfo();
     logger.info({ url: info.url }, "Telegram webhook set");
   } catch (err) {
     logger.error({ err }, "Failed to set Telegram webhook");
   }
-});
-
-// === Health check route for UptimeRobot & monitoring ===
-app.get("/health", (req, res) => {
-  res.status(200).json({ 
-    status: "ok", 
-    uptime: process.uptime(),
-    timestamp: new Date().toISOString()
-  });
 });
