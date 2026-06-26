@@ -58,3 +58,12 @@ app.listen(port, async (err?: Error) => {
     logger.error({ err }, "Failed to set Telegram webhook");
   }
 });
+
+// === Health check route for UptimeRobot & monitoring ===
+app.get("/health", (req, res) => {
+  res.status(200).json({ 
+    status: "ok", 
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString()
+  });
+});
