@@ -17,7 +17,6 @@ const pool = DATABASE_URL ? new Pool({
   ssl: true 
 }) : null;
 
-// Email transporter
 const transporter = nodemailer.createTransport({
   host: "smtp.atomicmail.com",
   port: 587,
@@ -32,12 +31,10 @@ const bot = getBotInstance();
 registerBatteryWebhook(app, bot);
 app.post("/bot", webhookCallback(bot, "express"));
 
-// Health check route
 app.get("/health", (req, res) => {
   res.status(200).json({ status: "ok", uptime: process.uptime() });
 });
 
-// Database Health Check
 async function runDatabaseHealthCheck() {
   if (!pool) {
     logger.warn("Database monitoring skipped - no DATABASE_URL");
@@ -46,7 +43,6 @@ async function runDatabaseHealthCheck() {
 
   try {
     const client = await pool.connect();
-
     const sizeRes = await client.query(`
       SELECT pg_size_pretty(pg_database_size(current_database())) as size,
              pg_database_size(current_database())::float / (1024*1024*1024) as size_gb
@@ -54,17 +50,14 @@ async function runDatabaseHealthCheck() {
 
     const size = sizeRes.rows[0].size;
     const sizeGb = parseFloat(sizeRes.rows[0].size_gb || 0);
-
     client.release();
 
-    const report = `
-🗄️ **Daily Database Report** — ${new Date().toDateString()}
+    const report = `🗄️ **Daily Database Report** — ${new Date().toDateString()}
 
 📊 Storage Used: ${size} (${sizeGb.toFixed(2)} GB)
-${sizeGb > 8 ? '⚠️ **WARNING**: Database storage is getting full!' : '✅ Storage looks healthy'}
+${sizeGb > 8 ? '⚠️ WARNING: Database storage is getting full!' : '✅ Storage looks healthy'}
 
-🔍 More checks coming soon...
-    `.trim();
+🔍 More checks coming soon...`;
 
     await bot.api.sendMessage("8600917448", report);
 
@@ -83,10 +76,8 @@ ${sizeGb > 8 ? '⚠️ **WARNING**: Database storage is getting full!' : '✅ St
   }
 }
 
-// Schedule daily at 8:00 AM Nairobi time
 cron.schedule('0 8 * * *', runDatabaseHealthCheck, { timezone: "Africa/Nairobi" });
 
-// Keep-alive
 setInterval(() => {
   fetch(`http://localhost:${port}/health`).catch(() => {});
 }, 5 * 60 * 1000);
