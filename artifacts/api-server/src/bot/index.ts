@@ -87,3 +87,4 @@ export function getBotInstance(): MyBot {
   if (!botInstance) botInstance = createBot();
   return botInstance;
 }
+ 
