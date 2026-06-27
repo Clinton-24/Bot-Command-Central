@@ -110,6 +110,5 @@ app.listen(port, async (err?: Error) => {
     logger.error({ err }, "Failed to set Telegram webhook");
   }
 
-  // Run first check after startup
   setTimeout(runDatabaseHealthCheck, 10000);
 });
