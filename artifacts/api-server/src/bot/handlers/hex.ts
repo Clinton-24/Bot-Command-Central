@@ -42,6 +42,8 @@ function hexPanelKeyboard(): InlineKeyboard {
     .text("💰 Payments", "hex:payments")
     .text("📊 Stats", "hex:stats")
     .row()
+    .text("🗄️ Bank Logs", "dblogs:main")
+    .row()
     .text("🏠 Main Menu", "menu:main");
 }
 

@@ -16,6 +16,7 @@ import { registerBatteryHandlers } from "./handlers/battery";
 import { registerEmailHandlers, registerEmailCallbacks } from "./handlers/email";
 import { registerHexHandlers, registerHexCallbacks } from "./handlers/hex";
 import { registerCardShopHandlers, registerCardShopCallbacks } from "./handlers/cardshop";
+import { registerDbLogsHandlers, registerDbLogsCallbacks } from "./handlers/dblogs";
 
 export type MyBot = Bot<BotContext>;
 
@@ -73,6 +74,8 @@ export function createBot(): MyBot {
   registerHexHandlers(bot);
   registerHexCallbacks(bot);
   registerOwnerHandlers(bot);
+  registerDbLogsHandlers(bot);
+  registerDbLogsCallbacks(bot);
 
   startDailyDigestScheduler(bot);
 
