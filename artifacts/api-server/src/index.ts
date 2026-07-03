@@ -6,6 +6,7 @@ import { webhookCallback } from "grammy";
 import { Pool } from 'pg';
 import nodemailer from 'nodemailer';
 import cron from 'node-cron';
+import { runExternalDbChecks } from "./bot/handlers/extdblogs";
 
 const rawPort = process.env["PORT"];
 if (!rawPort) throw new Error("PORT environment variable is required");
@@ -77,6 +78,12 @@ ${sizeGb > 8 ? '⚠️ WARNING: Database storage is getting full!' : '✅ Storag
 }
 
 cron.schedule('0 8 * * *', runDatabaseHealthCheck, { timezone: "Africa/Nairobi" });
+
+// External DB checks every 6 hours
+const ownerId = process.env.BOT_OWNER_ID ? Number(process.env.BOT_OWNER_ID) : NaN;
+if (!isNaN(ownerId)) {
+  cron.schedule('0 */6 * * *', () => runExternalDbChecks(bot, ownerId), { timezone: "Africa/Nairobi" });
+}
 
 setInterval(() => {
   fetch(`http://localhost:${port}/health`).catch(() => {});

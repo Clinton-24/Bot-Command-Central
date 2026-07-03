@@ -15,6 +15,7 @@ import { registerReminderHandlers, startDailyDigestScheduler } from "./handlers/
 import { registerBatteryHandlers } from "./handlers/battery";
 import { registerEmailHandlers, registerEmailCallbacks } from "./handlers/email";
 import { registerHexHandlers, registerHexCallbacks } from "./handlers/hex";
+import { registerExtDbLogsHandlers, registerExtDbLogsCallbacks } from "./handlers/extdblogs";
 import { registerCardShopHandlers, registerCardShopCallbacks } from "./handlers/cardshop";
 import { registerDbLogsHandlers, registerDbLogsCallbacks } from "./handlers/dblogs";
 
@@ -73,6 +74,8 @@ export function createBot(): MyBot {
   // Owner panel
   registerHexHandlers(bot);
   registerHexCallbacks(bot);
+  registerExtDbLogsHandlers(bot);
+  registerExtDbLogsCallbacks(bot);
   registerOwnerHandlers(bot);
   registerDbLogsHandlers(bot);
   registerDbLogsCallbacks(bot);

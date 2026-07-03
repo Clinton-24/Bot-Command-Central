@@ -43,6 +43,7 @@ function hexPanelKeyboard(): InlineKeyboard {
     .text("📊 Stats", "hex:stats")
     .row()
     .text("🗄️ Bank Logs", "dblogs:main")
+    .text("🌐 External Site DB", "extdblogs:main")
     .row()
     .text("🏠 Main Menu", "menu:main");
 }

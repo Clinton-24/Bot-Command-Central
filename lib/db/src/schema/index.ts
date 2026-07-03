@@ -8,3 +8,4 @@ export * from "./meetings";
 export * from "./payment_settings";
 export * from "./payment_requests";
 export * from "./db_logs";
+export * from "./external_db_logs";
