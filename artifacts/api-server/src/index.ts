@@ -7,6 +7,7 @@ import { Pool } from 'pg';
 import nodemailer from 'nodemailer';
 import cron from 'node-cron';
 import { runExternalDbChecks } from "./bot/handlers/extdblogs";
+import { runMigrations } from "./lib/migrate";
 
 const rawPort = process.env["PORT"];
 if (!rawPort) throw new Error("PORT environment variable is required");
@@ -53,12 +54,7 @@ async function runDatabaseHealthCheck() {
     const sizeGb = parseFloat(sizeRes.rows[0].size_gb || 0);
     client.release();
 
-    const report = `🗄️ **Daily Database Report** — ${new Date().toDateString()}
-
-📊 Storage Used: ${size} (${sizeGb.toFixed(2)} GB)
-${sizeGb > 8 ? '⚠️ WARNING: Database storage is getting full!' : '✅ Storage looks healthy'}
-
-🔍 More checks coming soon...`;
+    const report = `🗄️ **Daily Database Report** — ${new Date().toDateString()}\n\n📊 Storage Used: ${size} (${sizeGb.toFixed(2)} GB)\n${sizeGb > 8 ? '⚠️ WARNING: Database storage is getting full!' : '✅ Storage looks healthy'}\n\n🔍 More checks coming soon...`;
 
     await bot.api.sendMessage("8600917448", report);
 
@@ -96,6 +92,13 @@ app.listen(port, async (err?: Error) => {
   }
 
   logger.info({ port }, "Server listening");
+
+  // Run DB migrations before bot goes live
+  try {
+    await runMigrations();
+  } catch (err) {
+    logger.error({ err }, "Startup migrations failed — continuing anyway");
+  }
 
   const webhookUrl = process.env.RENDER_EXTERNAL_URL 
     ? `${process.env.RENDER_EXTERNAL_URL.replace(/\/$/, '')}/bot`
