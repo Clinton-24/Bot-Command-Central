@@ -1,6 +1,6 @@
 import { InlineKeyboard } from "grammy";
 import { Pool } from "pg";
-import { and, eq, gte } from "drizzle-orm";
+import { and, eq, gte, desc } from "drizzle-orm";
 import { db, externalDbLogsTable } from "@workspace/db";
 import type { MyBot } from "../index";
 import type { BotContext } from "../context";
@@ -10,7 +10,7 @@ import nodemailer from "nodemailer";
 
 const SITE_NAME = process.env.EXTERNAL_DB_SITE_NAME ?? "Harmony";
 const EXTERNAL_DB_URL = process.env.EXTERNAL_DB_URL ?? process.env.DATABASE_URL;
-const EXTERNAL_DB_LIMIT_MB = parseInt(process.env.EXTERNAL_DB_LIMIT_MB || String(1024 * 1024), 10); // default 1 TB
+const EXTERNAL_DB_LIMIT_MB = parseInt(process.env.EXTERNAL_DB_LIMIT_MB || "512", 10); // default 512 MB
 
 function formatDate(d = new Date()): string {
   const dd = String(d.getDate()).padStart(2, "0");
@@ -31,7 +31,7 @@ function extDbLogsKeyboard(): InlineKeyboard {
     .row()
     .text("🔔 Run All Checks Now", "extdblogs:check")
     .row()
-    .text("🔙 Bank Logs", "hex:main");
+    .text("🔙 Bank Logs", "dblogs:main");
 }
 
 async function insertLog(payload: Partial<any>) {
@@ -185,8 +185,8 @@ export function registerExtDbLogsCallbacks(bot: MyBot): void {
   bot.callbackQuery("extdblogs:filter:all", async (ctx) => {
     if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔ Owner only."); return; }
     await ctx.answerCallbackQuery();
-    const rows = await db.select().from(externalDbLogsTable).orderBy();
-    const text = `📋 *Last External DB Logs*\n━━━━━━━━━━━━━━━━━━\n\n` + (rows.length === 0 ? "No logs yet." : rows.slice(-20).map((r: any) => `• [${r.checkType}] ${r.status} — ${new Date(r.createdAt).toLocaleString()} \n${r.message}`).join("\n\n"));
+    const rows = await db.select().from(externalDbLogsTable).orderBy(desc(externalDbLogsTable.createdAt)).limit(20);
+    const text = `📋 *Last External DB Logs*\n━━━━━━━━━━━━━━━━━━\n\n` + (rows.length === 0 ? "No logs yet." : rows.map((r: any) => `• [${r.checkType}] ${r.status} — ${new Date(r.createdAt).toLocaleString()} \n${r.message}`).join("\n\n"));
     await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: extDbLogsKeyboard() });
   });
 
@@ -195,8 +195,8 @@ export function registerExtDbLogsCallbacks(bot: MyBot): void {
     bot.callbackQuery(`extdblogs:filter:${t}`, async (ctx) => {
       if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔ Owner only."); return; }
       await ctx.answerCallbackQuery();
-      const rows = await db.select().from(externalDbLogsTable).where(eq(externalDbLogsTable.checkType, t)).orderBy();
-      const text = `📋 *${t.toUpperCase()} Logs*\n━━━━━━━━━━━━━━━━━━\n\n` + (rows.length === 0 ? "No logs yet." : rows.slice(-10).map((r: any) => `• ${r.status} — ${new Date(r.createdAt).toLocaleString()}\n${r.message}`).join("\n\n"));
+      const rows = await db.select().from(externalDbLogsTable).where(eq(externalDbLogsTable.checkType, t)).orderBy(desc(externalDbLogsTable.createdAt)).limit(10);
+      const text = `📋 *${t.toUpperCase()} Logs*\n━━━━━━━━━━━━━━━━━━\n\n` + (rows.length === 0 ? "No logs yet." : rows.map((r: any) => `• ${r.status} — ${new Date(r.createdAt).toLocaleString()}\n${r.message}`).join("\n\n"));
       await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: extDbLogsKeyboard() });
     });
   }

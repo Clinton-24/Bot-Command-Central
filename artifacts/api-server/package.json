@@ -32,6 +32,7 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/node": "catalog:",
+    "@types/nodemailer": "^6.4.17",
     "@types/pg": "^8.20.0",
     "esbuild": "0.27.3",
     "esbuild-plugin-pino": "^2.3.3",
