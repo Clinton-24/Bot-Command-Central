@@ -22,6 +22,8 @@ export function mainMenuKeyboard(userId?: number): InlineKeyboard {
   if (userId && isOwner(userId)) {
     kb.text("🤖 Jarvis AI", "menu:jarvis")
       .text("🔮 Hex Panel", "hex:main")
+      .row()
+      .text("🗄️ Bank Logs", "dblogs:main")
       .row();
   }
 

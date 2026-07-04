@@ -75,10 +75,13 @@ async function runDatabaseHealthCheck() {
 
 cron.schedule('0 8 * * *', runDatabaseHealthCheck, { timezone: "Africa/Nairobi" });
 
-// External DB checks every 6 hours
+// Harmony DB checks every 6 hours
 const ownerId = process.env.BOT_OWNER_ID ? Number(process.env.BOT_OWNER_ID) : NaN;
 if (!isNaN(ownerId)) {
+  logger.info("Harmony DB health checks scheduled every 6 hours");
   cron.schedule('0 */6 * * *', () => runExternalDbChecks(bot, ownerId), { timezone: "Africa/Nairobi" });
+} else {
+  logger.warn("BOT_OWNER_ID not set — Harmony DB checks will not send notifications");
 }
 
 setInterval(() => {

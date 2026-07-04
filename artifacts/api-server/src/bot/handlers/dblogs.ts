@@ -39,9 +39,8 @@ function dbLogsKeyboard(): InlineKeyboard {
     .text("📋 All Logs", "dblogs:filter:all")
     .row()
     .text("🔔 Run Check Now", "dblogs:check")
-    .text("🌐 External Site DB", "extdblogs:main")
     .row()
-    .text("🔙 Hex Panel", "hex:main");
+    .text("🔙 Main Menu", "menu:main");
 }
 
 // ── DB check logic ────────────────────────────────────────────────────────────
