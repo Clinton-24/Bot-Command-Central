@@ -87,6 +87,9 @@ Today's date: ${new Date().toDateString()}`;
 async function callOpenRouter(
   messages: Array<{ role: "user" | "assistant" | "system"; content: string }>
 ): Promise<string> {
+  if (!OPENROUTER_API_KEY) {
+    throw new Error("OPENROUTER_API_KEY is not set. Add it to Render environment variables.");
+  }
   const res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
     method: "POST",
     headers: {
