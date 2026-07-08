@@ -10,7 +10,7 @@ import { logger } from "../../lib/logger";
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
-const MODEL = "openrouter/free"; // auto-selects best available free model
+const MODEL = "google/gemma-3-4b-it:free"; // reliable free model on OpenRouter
 
 // ── Product context builder ───────────────────────────────────────────────────
 
