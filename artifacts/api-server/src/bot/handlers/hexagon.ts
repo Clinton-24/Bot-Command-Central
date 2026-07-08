@@ -10,7 +10,7 @@ import { logger } from "../../lib/logger";
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
-const MODEL = "google/gemma-3-4b-it"; // Gemma 3 4B on OpenRouter
+const MODEL = "meta-llama/llama-3.3-70b-instruct:free"; // Llama 3.3 70B — stable free model on OpenRouter
 
 // ── Product context builder ───────────────────────────────────────────────────
 
