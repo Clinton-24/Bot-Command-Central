@@ -4,7 +4,7 @@ import type { BotContext } from "../context";
 import { processChk, processRzp, processBin, processGen } from "./cards";
 import { processSocial } from "./social";
 import { processMeetingInput } from "./meetings";
-import { handleJarvisMessage } from "./jarvis";
+import { handleHexagonMessage } from "./hexagon";
 import { draftEmail } from "./email";
 import { processHexInput } from "./hex";
 import { logger } from "../../lib/logger";
@@ -20,7 +20,7 @@ export function mainMenuKeyboard(userId?: number): InlineKeyboard {
     .row();
 
   if (userId && isOwner(userId)) {
-    kb.text("🤖 Jarvis AI", "menu:jarvis")
+    kb.text("🤖 Hexagon AI", "menu:hexagon")
       .text("🔮 Hex Panel", "hex:main")
       .row()
       .text("🗄️ Bank Logs", "dblogs:main")
@@ -119,8 +119,8 @@ export function registerMenuHandlers(bot: MyBot): void {
         await processSocial(ctx, detail, text);
       } else if (category === "meeting") {
         await processMeetingInput(ctx, detail, text);
-      } else if (category === "jarvis") {
-        if (detail === "input") await handleJarvisMessage(ctx, text);
+      } else if (category === "hexagon") {
+        if (detail === "input") await handleHexagonMessage(ctx, text);
         else if (detail === "email") await draftEmail(ctx, text);
       } else if (pending.startsWith("hex:")) {
         ctx.session.pendingAction = pending; // restore before handler (it may set a new one)
@@ -187,8 +187,8 @@ export function registerMenuHandlers(bot: MyBot): void {
       `📅 *Meetings*\n` +
       `/schedule · /meetings\n\n` +
       (isOwnerUser
-        ? `🤖 *Jarvis AI (owner)*\n` +
-          `/jarvis · /ai [question]\n` +
+        ? `🤖 *Hexagon AI (owner)*\n` +
+          `/hexagon · /ai [question]\n` +
           `/email [brief] · /remind <time> <msg>\n` +
           `/reminders · /digest · /battery\n` +
           `/clearai\n\n`

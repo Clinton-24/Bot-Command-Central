@@ -29,7 +29,7 @@ async function buildProductContext(): Promise<string> {
     );
     return `Current active products in the shop:\n${lines.join("\n")}`;
   } catch (err) {
-    logger.error({ err }, "Failed to fetch products for Jarvis context");
+    logger.error({ err }, "Failed to fetch products for Hexagon context");
     return "Product data temporarily unavailable.";
   }
 }
@@ -49,7 +49,7 @@ async function buildOrderContext(): Promise<string> {
     );
     return `Recent orders (last 10):\n${lines.join("\n")}`;
   } catch (err) {
-    logger.error({ err }, "Failed to fetch orders for Jarvis context");
+    logger.error({ err }, "Failed to fetch orders for Hexagon context");
     return "Order data temporarily unavailable.";
   }
 }
@@ -60,7 +60,7 @@ async function buildSystemPrompt(): Promise<string> {
   const productCtx = await buildProductContext();
   const orderCtx = await buildOrderContext();
 
-  return `You are Jarvis, a sharp and intelligent personal AI assistant embedded inside a Telegram bot called Bot-Command-Central. You serve the bot owner only.
+  return `You are Hexagon, a sharp and intelligent personal AI assistant embedded inside a Telegram bot called Bot-Command-Central. You serve the bot owner only.
 
 You have two roles:
 1. SHOP ASSISTANT — You know the bot's products and orders and can answer questions about them, help analyze sales, suggest pricing, or answer customer-related queries.
@@ -96,7 +96,7 @@ async function callOpenRouter(
       "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
       "Content-Type": "application/json",
       "HTTP-Referer": "https://bot-command-central-1.onrender.com",
-      "X-Title": "Bot-Command-Central Jarvis",
+      "X-Title": "Bot-Command-Central Hexagon",
     },
     body: JSON.stringify({
       model: MODEL,
@@ -135,7 +135,7 @@ function trimHistory(history: Array<{ role: string; content: string }>, maxTurns
 
 // ── Core ask function ─────────────────────────────────────────────────────────
 
-export async function askJarvis(userId: number, userMessage: string): Promise<string> {
+export async function askHexagon(userId: number, userMessage: string): Promise<string> {
   const history = getHistory(userId);
   history.push({ role: "user", content: userMessage });
   trimHistory(history);
@@ -167,42 +167,42 @@ function splitMessage(text: string, maxLen = 4000): string[] {
 
 // ── Keyboard ──────────────────────────────────────────────────────────────────
 
-export function jarvisMenuKeyboard(): InlineKeyboard {
+export function hexagonMenuKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
-    .text("💬 Chat", "jarvis:chat")
-    .text("🛍️ Products Q&A", "jarvis:products")
+    .text("💬 Chat", "hexagon:chat")
+    .text("🛍️ Products Q&A", "hexagon:products")
     .row()
-    .text("📦 Order Summary", "jarvis:orders")
-    .text("📧 Draft Email", "jarvis:email")
+    .text("📦 Order Summary", "hexagon:orders")
+    .text("📧 Draft Email", "hexagon:email")
     .row()
-    .text("📅 Daily Digest", "jarvis:digest")
-    .text("⏰ Reminders", "jarvis:reminders")
+    .text("📅 Daily Digest", "hexagon:digest")
+    .text("⏰ Reminders", "hexagon:reminders")
     .row()
-    .text("🧹 Clear History", "jarvis:clear")
+    .text("🧹 Clear History", "hexagon:clear")
     .text("🏠 Main Menu", "menu:main");
 }
 
-// ── Handle a Jarvis message ───────────────────────────────────────────────────
+// ── Handle a Hexagon message ───────────────────────────────────────────────────
 
-export async function handleJarvisMessage(ctx: BotContext, input: string): Promise<void> {
+export async function handleHexagonMessage(ctx: BotContext, input: string): Promise<void> {
   const userId = ctx.from!.id;
   const thinking = await ctx.reply("🤔 _Thinking..._", { parse_mode: "Markdown" });
 
   try {
-    const reply = await askJarvis(userId, input);
+    const reply = await askHexagon(userId, input);
     await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
 
     const chunks = splitMessage(reply);
     for (let i = 0; i < chunks.length; i++) {
       const isLast = i === chunks.length - 1;
       await ctx.reply(
-        (i === 0 ? `🤖 *Jarvis*\n━━━━━━━━━━━━━━━━━━\n\n` : "") + chunks[i],
+        (i === 0 ? `🤖 *Hexagon*\n━━━━━━━━━━━━━━━━━━\n\n` : "") + chunks[i],
         {
           parse_mode: "Markdown",
           reply_markup: isLast
             ? new InlineKeyboard()
-                .text("🧹 Clear Chat", "jarvis:clear")
-                .text("🤖 Jarvis Menu", "menu:jarvis")
+                .text("🧹 Clear Chat", "hexagon:clear")
+                .text("🤖 Hexagon Menu", "menu:hexagon")
             : undefined,
         }
       );
@@ -210,35 +210,35 @@ export async function handleJarvisMessage(ctx: BotContext, input: string): Promi
   } catch (err) {
     await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
     const msg = err instanceof Error ? err.message : "Unknown error";
-    logger.error({ err }, "Jarvis response error");
-    await ctx.reply(`❌ Jarvis error: ${msg}\n\nCheck that OPENROUTER_API_KEY is set on Render.`);
+    logger.error({ err }, "Hexagon response error");
+    await ctx.reply(`❌ Hexagon error: ${msg}\n\nCheck that OPENROUTER_API_KEY is set on Render.`);
   }
 }
 
 // ── Register handlers ─────────────────────────────────────────────────────────
 
-export function registerJarvisHandlers(bot: MyBot): void {
-  bot.command("jarvis", async (ctx) => {
+export function registerHexagonHandlers(bot: MyBot): void {
+  bot.command("hexagon", async (ctx) => {
     if (!ctx.from || !isOwner(ctx.from.id)) {
-      await ctx.reply("⛔ Jarvis is the owner's personal assistant.");
+      await ctx.reply("⛔ Hexagon is the owner's personal assistant.");
       return;
     }
     const input = ctx.match?.trim();
     if (!input) {
       await ctx.reply(
-        `🤖 *JARVIS — AI Assistant*\n━━━━━━━━━━━━━━━━━━\n\nPowered by OpenRouter. I know your shop products and orders in real time.\n\nAsk me anything or use the menu below.`,
-        { parse_mode: "Markdown", reply_markup: jarvisMenuKeyboard() }
+        `🤖 *HEXAGON — AI Assistant*\n━━━━━━━━━━━━━━━━━━\n\nPowered by OpenRouter. I know your shop products and orders in real time.\n\nAsk me anything or use the menu below.`,
+        { parse_mode: "Markdown", reply_markup: hexagonMenuKeyboard() }
       );
       return;
     }
-    await handleJarvisMessage(ctx, input);
+    await handleHexagonMessage(ctx, input);
   });
 
   bot.command("ai", async (ctx) => {
     if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.reply("⛔ Owner-only."); return; }
     const input = ctx.match?.trim();
     if (!input) { await ctx.reply("Usage: /ai [your question]"); return; }
-    await handleJarvisMessage(ctx, input);
+    await handleHexagonMessage(ctx, input);
   });
 
   bot.command("clearai", async (ctx) => {
@@ -248,35 +248,35 @@ export function registerJarvisHandlers(bot: MyBot): void {
   });
 }
 
-export function registerJarvisCallbacks(bot: MyBot): void {
-  bot.callbackQuery("menu:jarvis", async (ctx) => {
+export function registerHexagonCallbacks(bot: MyBot): void {
+  bot.callbackQuery("menu:hexagon", async (ctx) => {
     if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔ Owner only."); return; }
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(
-      `🤖 *JARVIS — AI Assistant*\n━━━━━━━━━━━━━━━━━━\n\nPowered by OpenRouter. I know your shop products and orders in real time.\n\nAsk me anything or use the menu below.`,
-      { parse_mode: "Markdown", reply_markup: jarvisMenuKeyboard() }
+      `🤖 *HEXAGON — AI Assistant*\n━━━━━━━━━━━━━━━━━━\n\nPowered by OpenRouter. I know your shop products and orders in real time.\n\nAsk me anything or use the menu below.`,
+      { parse_mode: "Markdown", reply_markup: hexagonMenuKeyboard() }
     );
   });
 
-  bot.callbackQuery("jarvis:chat", async (ctx) => {
+  bot.callbackQuery("hexagon:chat", async (ctx) => {
     if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔ Owner only."); return; }
-    ctx.session.pendingAction = "jarvis:input";
+    ctx.session.pendingAction = "hexagon:input";
     await ctx.answerCallbackQuery();
-    await ctx.reply(`💬 *Chat with Jarvis*\n━━━━━━━━━━━━━━━━━━\n\nType your message and I'll respond. I remember context across this session.`, { parse_mode: "Markdown" });
+    await ctx.reply(`💬 *Chat with Hexagon*\n━━━━━━━━━━━━━━━━━━\n\nType your message and I'll respond. I remember context across this session.`, { parse_mode: "Markdown" });
   });
 
-  bot.callbackQuery("jarvis:products", async (ctx) => {
+  bot.callbackQuery("hexagon:products", async (ctx) => {
     if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔ Owner only."); return; }
-    ctx.session.pendingAction = "jarvis:input";
+    ctx.session.pendingAction = "hexagon:input";
     await ctx.answerCallbackQuery();
     await ctx.reply(`🛍️ *Products Q&A*\n━━━━━━━━━━━━━━━━━━\n\nAsk me anything about your products.\n\nExamples:\n• _"Which products are low on stock?"_\n• _"What's our most expensive item?"_\n• _"Suggest a discount for category X"_`, { parse_mode: "Markdown" });
   });
 
-  bot.callbackQuery("jarvis:orders", async (ctx) => {
+  bot.callbackQuery("hexagon:orders", async (ctx) => {
     if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔ Owner only."); return; }
     await ctx.answerCallbackQuery("📦 Fetching order summary...");
     try {
-      const reply = await askJarvis(ctx.from.id, "Give me a brief summary of recent orders — how many, what statuses, any patterns or issues?");
+      const reply = await askHexagon(ctx.from.id, "Give me a brief summary of recent orders — how many, what statuses, any patterns or issues?");
       const chunks = splitMessage(reply);
       for (let i = 0; i < chunks.length; i++) {
         await ctx.reply(
@@ -284,7 +284,7 @@ export function registerJarvisCallbacks(bot: MyBot): void {
           {
             parse_mode: "Markdown",
             reply_markup: i === chunks.length - 1
-              ? new InlineKeyboard().text("🤖 Jarvis Menu", "menu:jarvis")
+              ? new InlineKeyboard().text("🤖 Hexagon Menu", "menu:hexagon")
               : undefined,
           }
         );
@@ -294,32 +294,32 @@ export function registerJarvisCallbacks(bot: MyBot): void {
     }
   });
 
-  bot.callbackQuery("jarvis:email", async (ctx) => {
+  bot.callbackQuery("hexagon:email", async (ctx) => {
     if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔ Owner only."); return; }
-    ctx.session.pendingAction = "jarvis:input";
+    ctx.session.pendingAction = "hexagon:input";
     await ctx.answerCallbackQuery();
     await ctx.reply(`📧 *Draft an Email*\n━━━━━━━━━━━━━━━━━━\n\nDescribe what you need to say and I'll write a full email.\n\nExample:\n_"Write an email to a customer apologizing for a delayed order #42"_`, { parse_mode: "Markdown" });
   });
 
-  bot.callbackQuery("jarvis:digest", async (ctx) => {
+  bot.callbackQuery("hexagon:digest", async (ctx) => {
     if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔ Owner only."); return; }
     await ctx.answerCallbackQuery();
     await sendDailyDigest(ctx.from.id, bot);
   });
 
-  bot.callbackQuery("jarvis:reminders", async (ctx) => {
+  bot.callbackQuery("hexagon:reminders", async (ctx) => {
     if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔ Owner only."); return; }
     await ctx.answerCallbackQuery();
     await showReminders(ctx);
   });
 
-  bot.callbackQuery("jarvis:clear", async (ctx) => {
+  bot.callbackQuery("hexagon:clear", async (ctx) => {
     if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery(); return; }
     conversationHistory.delete(ctx.from.id);
     await ctx.answerCallbackQuery("🧹 History cleared");
     await ctx.editMessageText(
-      `🤖 *JARVIS*\n━━━━━━━━━━━━━━━━━━\n\n🧹 Chat history cleared. Fresh start!`,
-      { parse_mode: "Markdown", reply_markup: jarvisMenuKeyboard() }
+      `🤖 *HEXAGON*\n━━━━━━━━━━━━━━━━━━\n\n🧹 Chat history cleared. Fresh start!`,
+      { parse_mode: "Markdown", reply_markup: hexagonMenuKeyboard() }
     );
   });
 }
@@ -343,11 +343,11 @@ function formatReminderTime(d: Date): string {
 async function showReminders(ctx: BotContext): Promise<void> {
   const list = getReminderList();
   if (list.length === 0) {
-    await ctx.reply(`⏰ *REMINDERS*\n━━━━━━━━━━━━━━━━━━\n\nNo active reminders.\n\nSet one with:\n/remind 30m Check emails\n/remind 2h Team call`, { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🤖 Back to Jarvis", "menu:jarvis") });
+    await ctx.reply(`⏰ *REMINDERS*\n━━━━━━━━━━━━━━━━━━\n\nNo active reminders.\n\nSet one with:\n/remind 30m Check emails\n/remind 2h Team call`, { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🤖 Back to Hexagon", "menu:hexagon") });
     return;
   }
   const lines = list.map((r, i) => `${i + 1}. ⏰ ${r.label}\n   🕐 ${formatReminderTime(r.fireAt)}`).join("\n\n");
-  await ctx.reply(`⏰ *ACTIVE REMINDERS*\n━━━━━━━━━━━━━━━━━━\n\n${lines}`, { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🗑️ Clear All", "reminders:clear_all").text("🤖 Jarvis", "menu:jarvis") });
+  await ctx.reply(`⏰ *ACTIVE REMINDERS*\n━━━━━━━━━━━━━━━━━━\n\n${lines}`, { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🗑️ Clear All", "reminders:clear_all").text("🤖 Hexagon", "menu:hexagon") });
 }
 
 export function scheduleReminder(bot: MyBot, userId: number, label: string, fireAt: Date): string {
@@ -408,9 +408,9 @@ export async function sendDailyDigest(userId: number, bot: MyBot): Promise<void>
       digest += "\n";
     } catch { /* skip if DB unavailable */ }
 
-    digest += `_Have a productive day! Type /jarvis to chat with me._`;
+    digest += `_Have a productive day! Type /hexagon to chat with me._`;
 
-    await bot.api.sendMessage(userId, digest, { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("💬 Chat with Jarvis", "jarvis:chat").text("📅 Meetings", "menu:meetings") });
+    await bot.api.sendMessage(userId, digest, { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("💬 Chat with Hexagon", "hexagon:chat").text("📅 Meetings", "menu:meetings") });
   } catch (err) {
     logger.error({ err }, "sendDailyDigest error");
   }

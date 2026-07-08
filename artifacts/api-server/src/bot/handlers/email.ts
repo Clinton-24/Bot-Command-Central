@@ -2,7 +2,7 @@ import type { MyBot } from "../index";
 import type { BotContext } from "../context";
 import { InlineKeyboard } from "grammy";
 import { isOwner } from "../helpers";
-import { askJarvis } from "./jarvis";
+import { askHexagon } from "./hexagon";
 import { logger } from "../../lib/logger";
 
 export function registerEmailHandlers(bot: MyBot): void {
@@ -23,7 +23,7 @@ export function registerEmailHandlers(bot: MyBot): void {
           `• /email ask the team to submit timesheets by EOD`,
         {
           parse_mode: "Markdown",
-          reply_markup: new InlineKeyboard().text("🤖 Jarvis", "menu:jarvis"),
+          reply_markup: new InlineKeyboard().text("🤖 Hexagon", "menu:hexagon"),
         }
       );
       return;
@@ -39,7 +39,7 @@ export async function draftEmail(ctx: BotContext, brief: string): Promise<void> 
 
   try {
     const prompt = `Please draft a professional email for the following:\n\n${brief}\n\nFormat with Subject, then blank line, then body. End with [EMAIL_READY].`;
-    const draft = await askJarvis(userId, prompt);
+    const draft = await askHexagon(userId, prompt);
 
     await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
 
@@ -49,9 +49,9 @@ export async function draftEmail(ctx: BotContext, brief: string): Promise<void> 
         parse_mode: "Markdown",
         reply_markup: new InlineKeyboard()
           .text("✏️ Revise", "email:revise")
-          .text("📧 Another", "jarvis:email")
+          .text("📧 Another", "hexagon:email")
           .row()
-          .text("🤖 Jarvis", "menu:jarvis"),
+          .text("🤖 Hexagon", "menu:hexagon"),
       }
     );
   } catch (err) {
@@ -67,7 +67,7 @@ export function registerEmailCallbacks(bot: MyBot): void {
       await ctx.answerCallbackQuery("⛔ Owner only.");
       return;
     }
-    ctx.session.pendingAction = "jarvis:input";
+    ctx.session.pendingAction = "hexagon:input";
     await ctx.answerCallbackQuery();
     await ctx.reply(
       `✏️ *Revise Email*\n━━━━━━━━━━━━━━━━━━\n\nTell me what to change:`,

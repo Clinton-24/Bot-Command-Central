@@ -92,7 +92,7 @@ export function registerBatteryHandlers(bot: MyBot): void {
           `The bot will alert you when battery drops below 20%.`,
         {
           parse_mode: "Markdown",
-          reply_markup: new InlineKeyboard().text("🤖 Jarvis", "menu:jarvis"),
+          reply_markup: new InlineKeyboard().text("🤖 Hexagon", "menu:hexagon"),
         }
       );
       return;
@@ -110,7 +110,7 @@ export function registerBatteryHandlers(bot: MyBot): void {
         `🕐 Last updated: ${age}m ago`,
       {
         parse_mode: "Markdown",
-        reply_markup: new InlineKeyboard().text("🤖 Jarvis", "menu:jarvis"),
+        reply_markup: new InlineKeyboard().text("🤖 Hexagon", "menu:hexagon"),
       }
     );
   });

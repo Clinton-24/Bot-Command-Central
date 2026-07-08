@@ -1,6 +1,6 @@
 import type { MyBot } from "../index";
 import { isOwner } from "../helpers";
-import { scheduleReminder, clearAllReminders, sendDailyDigest } from "./jarvis";
+import { scheduleReminder, clearAllReminders, sendDailyDigest } from "./hexagon";
 import { logger } from "../../lib/logger";
 import { InlineKeyboard } from "grammy";
 
@@ -65,8 +65,8 @@ export function registerReminderHandlers(bot: MyBot): void {
       {
         parse_mode: "Markdown",
         reply_markup: new InlineKeyboard()
-          .text("⏰ View Reminders", "jarvis:reminders")
-          .text("🤖 Jarvis", "menu:jarvis"),
+          .text("⏰ View Reminders", "hexagon:reminders")
+          .text("🤖 Hexagon", "menu:hexagon"),
       }
     );
   });
@@ -80,8 +80,8 @@ export function registerReminderHandlers(bot: MyBot): void {
       `⏰ Use the /remind command to set reminders.\n\nExample: /remind 1h Check messages`,
       {
         reply_markup: new InlineKeyboard()
-          .text("⏰ My Reminders", "jarvis:reminders")
-          .text("🤖 Jarvis", "menu:jarvis"),
+          .text("⏰ My Reminders", "hexagon:reminders")
+          .text("🤖 Hexagon", "menu:hexagon"),
       }
     );
   });
@@ -97,7 +97,7 @@ export function registerReminderHandlers(bot: MyBot): void {
       `🗑️ *All Reminders Cleared*\n━━━━━━━━━━━━━━━━━━\n\n${n} reminder(s) removed.`,
       {
         parse_mode: "Markdown",
-        reply_markup: new InlineKeyboard().text("🤖 Back to Jarvis", "menu:jarvis"),
+        reply_markup: new InlineKeyboard().text("🤖 Back to Hexagon", "menu:hexagon"),
       }
     );
   });
