@@ -10,7 +10,7 @@ import { logger } from "../../lib/logger";
 
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
-const MODEL = "mistralai/mistral-7b-instruct"; // fast, free-tier friendly on OpenRouter
+const MODEL = "mistralai/mistral-7b-instruct:free"; // free tier on OpenRouter
 
 // ── Product context builder ───────────────────────────────────────────────────
 
