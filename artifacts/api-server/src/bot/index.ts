@@ -10,7 +10,7 @@ import { registerOwnerHandlers } from "./handlers/owner";
 import { registerWelcomeHandler } from "./handlers/welcome";
 import { registerAntiSpamHandler } from "./handlers/antispam";
 import { registerMeetingHandlers, registerMeetingCallbacks } from "./handlers/meetings";
-import { registerHexagonHandlers, registerHexagonCallbacks } from "./handlers/hexagon";
+import { registerHexagonHandlers, registerHexagonCallbacks, sendDailyGroupDigest } from "./handlers/hexagon";
 import { registerReminderHandlers, startDailyDigestScheduler } from "./handlers/reminders";
 import { registerBatteryHandlers } from "./handlers/battery";
 import { registerEmailHandlers, registerEmailCallbacks } from "./handlers/email";

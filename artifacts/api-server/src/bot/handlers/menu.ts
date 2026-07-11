@@ -4,7 +4,8 @@ import type { BotContext } from "../context";
 import { processChk, processRzp, processBin, processGen } from "./cards";
 import { processSocial } from "./social";
 import { processMeetingInput } from "./meetings";
-import { handleHexagonMessage } from "./hexagon";
+import { handleHexagonMessage, logGroupMessage } from "./hexagon";
+import { processBankLogInput } from "./dblogs";
 import { draftEmail } from "./email";
 import { processHexInput } from "./hex";
 import { logger } from "../../lib/logger";
@@ -97,6 +98,9 @@ export function meetingsMenuKeyboard(): InlineKeyboard {
 
 export function registerMenuHandlers(bot: MyBot): void {
   bot.on("message:text", async (ctx, next) => {
+    // Log group messages for Hexagon analyst
+    await logGroupMessage(ctx).catch(() => {});
+
     const text = ctx.message.text.trim();
     if (text.startsWith("/")) return next();
 
@@ -123,8 +127,10 @@ export function registerMenuHandlers(bot: MyBot): void {
         if (detail === "input") await handleHexagonMessage(ctx, text);
         else if (detail === "email") await draftEmail(ctx, text);
       } else if (pending.startsWith("hex:")) {
-        ctx.session.pendingAction = pending; // restore before handler (it may set a new one)
+        ctx.session.pendingAction = pending;
         await processHexInput(ctx, pending, text);
+      } else if (pending.startsWith("banklogs:")) {
+        await processBankLogInput(ctx, pending, text);
       }
     } catch (err) {
       logger.error({ err }, "input interceptor error");
