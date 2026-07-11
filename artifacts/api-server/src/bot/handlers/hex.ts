@@ -44,6 +44,8 @@ function hexPanelKeyboard(): InlineKeyboard {
     .row()
     .text("🩺 Harmony DB", "extdblogs:main")
     .row()
+    .text("🔐 Access Control", "hex:access")
+    .row()
     .text("🏠 Main Menu", "menu:main");
 }
 

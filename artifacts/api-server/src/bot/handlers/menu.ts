@@ -6,6 +6,7 @@ import { processSocial } from "./social";
 import { processMeetingInput } from "./meetings";
 import { handleHexagonMessage, logGroupMessage } from "./hexagon";
 import { processBankLogInput } from "./dblogs";
+import { processAccessInput, checkAccess, handleInviteCode } from "./access";
 import { draftEmail } from "./email";
 import { processHexInput } from "./hex";
 import { logger } from "../../lib/logger";
@@ -97,6 +98,7 @@ export function meetingsMenuKeyboard(): InlineKeyboard {
 }
 
 export function registerMenuHandlers(bot: MyBot): void {
+  // Note: bot instance is passed through for access control
   bot.on("message:text", async (ctx, next) => {
     // Log group messages for Hexagon analyst
     await logGroupMessage(ctx).catch(() => {});
@@ -131,6 +133,8 @@ export function registerMenuHandlers(bot: MyBot): void {
         await processHexInput(ctx, pending, text);
       } else if (pending.startsWith("banklogs:")) {
         await processBankLogInput(ctx, pending, text);
+      } else if (pending.startsWith("access:") || pending.startsWith("acl:")) {
+        await processAccessInput(bot, ctx, pending, text);
       }
     } catch (err) {
       logger.error({ err }, "input interceptor error");
