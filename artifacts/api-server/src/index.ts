@@ -84,9 +84,28 @@ if (!isNaN(ownerId)) {
   logger.warn("BOT_OWNER_ID not set — Harmony DB checks will not send notifications");
 }
 
-setInterval(() => {
-  fetch(`http://localhost:${port}/health`).catch(() => {});
-}, 5 * 60 * 1000);
+// ── External self-ping to prevent Render free tier sleep ─────────────────────
+// Pings the public URL every 4 minutes so Render never idles the service
+const RENDER_URL = process.env.RENDER_EXTERNAL_URL?.replace(/\/$/, "");
+
+function startKeepAlive(): void {
+  if (!RENDER_URL) {
+    logger.warn("RENDER_EXTERNAL_URL not set — keep-alive disabled. Bot may sleep on free tier.");
+    return;
+  }
+
+  const pingUrl = `${RENDER_URL}/health`;
+  logger.info({ pingUrl }, "Keep-alive started (every 4 min)");
+
+  setInterval(async () => {
+    try {
+      const res = await fetch(pingUrl, { signal: AbortSignal.timeout(10_000) });
+      if (!res.ok) logger.warn({ status: res.status }, "Keep-alive ping returned non-200");
+    } catch (err) {
+      logger.warn({ err }, "Keep-alive ping failed");
+    }
+  }, 4 * 60 * 1000); // every 4 minutes — well under Render's 15-min idle threshold
+}
 
 app.listen(port, async (err?: Error) => {
   if (err) {
@@ -110,6 +129,9 @@ app.listen(port, async (err?: Error) => {
   try {
     await bot.api.setWebhook(webhookUrl, { drop_pending_updates: true });
     logger.info({ url: webhookUrl }, "Telegram webhook set");
+
+  // Start external keep-alive pinger
+  startKeepAlive();
   } catch (err) {
     logger.error({ err }, "Failed to set Telegram webhook");
   }
