@@ -105,7 +105,9 @@ function harmonyKeyboard(): InlineKeyboard {
     .row()
     .text("📋 All Logs", "harmony:filter:all")
     .row()
-    .text("🔔 Run All Checks Now", "harmony:check")
+    .text("🔔 Run All Checks", "harmony:check")
+    .row()
+    .text("💾 Backup Now", "harmony:backup")
     .row()
     .text("🔙 Hex Panel", "hex:main");
 }
@@ -229,40 +231,126 @@ async function checkIntegrity(bot: MyBot, ownerId: number): Promise<void> {
   }
 }
 
-// Backup is manual — triggered via POST /api/extdb/backup from your backup script
-async function checkBackupStatus(bot: MyBot, ownerId: number): Promise<void> {
+// ── Automated backup: dumps Harmony DB via SQL queries → sends .sql file to owner DM ──
+
+async function runAutomatedBackup(bot: MyBot, ownerId: number): Promise<void> {
+  if (!EXTERNAL_DB_URL) {
+    await insertLog({ site: SITE_NAME, checkType: "backup", status: "failed", message: `Today, ${formatDate()} backup Failed...`, details: "EXTERNAL_DB_URL not set" });
+    await notify(bot, ownerId,
+      `❌ *Harmony DB — Backup*\n━━━━━━━━━━━━━━━━━━\n\nToday, ${formatDate()} backup Failed...\n_EXTERNAL\_DB\_URL not configured on Render._`,
+      `❌ Harmony DB — Backup Failed ${formatDate()}`,
+      `Backup failed: EXTERNAL_DB_URL not set.`
+    );
+    return;
+  }
+
+  const startTime = Date.now();
+  logger.info("Starting automated Harmony DB backup...");
+
+  const pool = new Pool({ connectionString: EXTERNAL_DB_URL, ssl: { rejectUnauthorized: false } });
+
   try {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
+    const client = await pool.connect();
 
-    const rows = await db
-      .select()
-      .from(externalDbLogsTable)
-      .where(eq(externalDbLogsTable.checkType, "backup"))
-      .orderBy(desc(externalDbLogsTable.createdAt))
-      .limit(10);
+    // Get all table names
+    const tablesRes = await client.query(`
+      SELECT tablename FROM pg_tables
+      WHERE schemaname = 'public'
+      ORDER BY tablename
+    `);
+    const tables: string[] = tablesRes.rows.map((r: { tablename: string }) => r.tablename);
 
-    const todayBackup = rows.find((r) => new Date(r.createdAt) >= today && r.status === "success");
+    let sql = `-- Harmony DB Backup\n-- Generated: ${new Date().toISOString()}\n-- Tables: ${tables.length}\n\n`;
+    sql += `SET client_encoding = 'UTF8';\nSET standard_conforming_strings = on;\n\n`;
 
-    if (todayBackup) {
-      const msg = `Today, ${formatDate()} backup successful...`;
-      await insertLog({ site: SITE_NAME, checkType: "backup", status: "success", message: msg });
-      await notify(bot, ownerId,
-        `✅ *Harmony DB — Backup*\n━━━━━━━━━━━━━━━━━━\n\n${msg}`,
-        `✅ Harmony DB — Backup OK ${formatDate()}`,
-        `Harmony DB backup check on ${formatDate()}.\nA successful backup was recorded today.`
-      );
-    } else {
-      const msg = `Today, ${formatDate()} backup Failed...`;
-      await insertLog({ site: SITE_NAME, checkType: "backup", status: "failed", message: msg, details: "No backup recorded today via /api/extdb/backup" });
-      await notify(bot, ownerId,
-        `❌ *Harmony DB — Backup*\n━━━━━━━━━━━━━━━━━━\n\n${msg}\n_No backup reported today. Call POST /api/extdb/backup after your backup runs._`,
-        `❌ Harmony DB — Backup Failed ${formatDate()}`,
-        `Harmony DB backup check on ${formatDate()}.\nNo backup has been reported today.\nMake sure your backup script calls POST /api/extdb/backup after completion.`
-      );
+    let totalRows = 0;
+
+    for (const table of tables) {
+      try {
+        // Get columns
+        const colRes = await client.query(`
+          SELECT column_name, data_type
+          FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = $1
+          ORDER BY ordinal_position
+        `, [table]);
+
+        const cols = colRes.rows.map((c: { column_name: string }) => c.column_name);
+        const colList = cols.map((c: string) => `"${c}"`).join(", ");
+
+        // Get rows
+        const dataRes = await client.query(`SELECT * FROM "${table}"`);
+        const rows = dataRes.rows;
+        totalRows += rows.length;
+
+        sql += `-- Table: ${table} (${rows.length} rows)\n`;
+
+        if (rows.length > 0) {
+          const valueLines = rows.map((row: Record<string, unknown>) => {
+            const vals = cols.map((col: string) => {
+              const v = row[col];
+              if (v === null || v === undefined) return "NULL";
+              if (typeof v === "number" || typeof v === "boolean") return String(v);
+              if (v instanceof Date) return `'${v.toISOString()}'`;
+              return `'${String(v).replace(/'/g, "''")}'`;
+            });
+            return `(${vals.join(", ")})`;
+          });
+          sql += `INSERT INTO "${table}" (${colList}) VALUES\n${valueLines.join(",\n")};\n\n`;
+        } else {
+          sql += `-- (empty table)\n\n`;
+        }
+      } catch (tableErr) {
+        sql += `-- ERROR backing up ${table}: ${tableErr instanceof Error ? tableErr.message : "unknown"}\n\n`;
+      }
     }
+
+    client.release();
+
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+    const sizeKb = (Buffer.byteLength(sql, "utf8") / 1024).toFixed(1);
+    const filename = `harmony-backup-${formatDate()}.sql`;
+
+    // Send SQL file to owner DM via Telegram
+    await bot.api.sendDocument(
+      ownerId,
+      new (await import("grammy")).InputFile(Buffer.from(sql, "utf8"), filename),
+      {
+        caption:
+          `💾 *HARMONY DB BACKUP*\n━━━━━━━━━━━━━━━━━━\n\n` +
+          `✅ Today, ${formatDate()} backup successful...\n\n` +
+          `📊 Tables: *${tables.length}* · Rows: *${totalRows}*\n` +
+          `📦 Size: *${sizeKb} KB*\n` +
+          `⏱️ Duration: *${elapsed}s*`,
+        parse_mode: "Markdown",
+      }
+    );
+
+    // Log success
+    await insertLog({
+      site: SITE_NAME, checkType: "backup", status: "success",
+      message: `Today, ${formatDate()} backup successful...`,
+      details: `${tables.length} tables, ${totalRows} rows, ${sizeKb}KB, ${elapsed}s`,
+    });
+
+    // Email notification
+    await sendEmail(
+      `✅ Harmony DB — Backup OK ${formatDate()}`,
+      `Harmony DB backup completed on ${formatDate()}.\nTables: ${tables.length}, Rows: ${totalRows}, Size: ${sizeKb}KB, Duration: ${elapsed}s\nBackup file sent to your Telegram DM.`
+    );
+
+    logger.info({ tables: tables.length, rows: totalRows, sizeKb, elapsed }, "Harmony backup complete");
   } catch (err) {
-    logger.error({ err }, "checkBackupStatus error");
+    const detail = err instanceof Error ? err.message : "Unknown error";
+    await insertLog({ site: SITE_NAME, checkType: "backup", status: "failed", message: `Today, ${formatDate()} backup Failed...`, details: detail });
+    await notify(bot, ownerId,
+      `❌ *Harmony DB — Backup*\n━━━━━━━━━━━━━━━━━━\n\nToday, ${formatDate()} backup Failed...\n_${detail}_`,
+      `❌ Harmony DB — Backup Failed ${formatDate()}`,
+      `Backup failed on ${formatDate()}.\nError: ${detail}`
+    );
+    logger.error({ err }, "Harmony backup failed");
+  } finally {
+    await pool.end().catch(() => {});
   }
 }
 
@@ -271,7 +359,7 @@ async function checkBackupStatus(bot: MyBot, ownerId: number): Promise<void> {
 export async function runExternalDbChecks(bot: MyBot, notifyUserId: number): Promise<void> {
   logger.info("Running Harmony DB health checks...");
   await checkConnection(bot, notifyUserId);
-  await checkBackupStatus(bot, notifyUserId);
+  await runAutomatedBackup(bot, notifyUserId);
   await checkStorage(bot, notifyUserId);
   await checkIntegrity(bot, notifyUserId);
 }
@@ -369,6 +457,30 @@ export function registerExtDbLogsCallbacks(bot: MyBot): void {
       );
     } catch (err) {
       await ctx.reply(`❌ Error: ${err instanceof Error ? err.message : "Unknown"}`);
+    }
+  });
+
+  // ── Manual backup now ───────────────────────────────────────────────────────
+  bot.callbackQuery("harmony:backup", async (ctx) => {
+    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔ Owner only."); return; }
+    await ctx.answerCallbackQuery("💾 Starting backup...");
+    try {
+      await ctx.editMessageText(
+        `💾 *HARMONY DB — BACKUP*\n━━━━━━━━━━━━━━━━━━\n\n⏳ Backup in progress...\n_Dumping all tables and sending to your DM._`,
+        { parse_mode: "Markdown" }
+      );
+      await runAutomatedBackup(bot, ctx.from.id);
+
+      // Refresh panel
+      const recent = await db.select().from(externalDbLogsTable)
+        .orderBy(desc(externalDbLogsTable.createdAt)).limit(8);
+      const lines = recent.map((r) => `${statusEmoji(r.status)} *${r.checkType}* — ${r.message}`).join("\n\n");
+      await ctx.editMessageText(
+        `🩺 *HARMONY DB — HEALTH MONITOR*\n━━━━━━━━━━━━━━━━━━\n\n${lines || "_No logs yet._"}`,
+        { parse_mode: "Markdown", reply_markup: harmonyKeyboard() }
+      );
+    } catch (err) {
+      await ctx.reply(`❌ Backup error: ${err instanceof Error ? err.message : "Unknown"}`);
     }
   });
 
