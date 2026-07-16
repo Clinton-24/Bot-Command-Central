@@ -5,6 +5,8 @@ import { db } from "@workspace/db";
 import { usersTable, groupSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "../../lib/logger";
+import { isOwner } from "../helpers";
+import { handleInviteCode, getAccess } from "./access";
 
 export function registerWelcomeHandler(bot: MyBot): void {
   bot.on("message:new_chat_members", async (ctx) => {
@@ -132,7 +134,7 @@ Welcome, *${name}*.
 Submit a request or use an invite code to get started.`,
         {
           parse_mode: "Markdown",
-          reply_markup: new (await import("grammy")).InlineKeyboard()
+          reply_markup: new InlineKeyboard()
             .text("🔑 Request Access", "access:request")
             .text("🎟️ I Have a Code", "access:invite"),
         }
