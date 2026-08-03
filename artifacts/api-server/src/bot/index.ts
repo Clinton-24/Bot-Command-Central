@@ -85,7 +85,21 @@ export function createBot(): MyBot {
   startDailyDigestScheduler(bot);
 
   bot.catch((err) => {
-    logger.error({ err: err.error, update: err.ctx?.update?.update_id }, "Bot error");
+    const e = err.error as { error_code?: number; description?: string } | Error;
+    const desc = "description" in e ? e.description : e instanceof Error ? e.message : String(e);
+    const code = "error_code" in e ? e.error_code : 0;
+
+    // Ignore harmless Telegram API errors — never crash the process over these
+    const ignored = [
+      "message is not modified",
+      "query is too old",
+      "message to edit not found",
+      "MESSAGE_ID_INVALID",
+      "bot was blocked by the user",
+    ];
+    if (ignored.some((msg) => desc?.includes(msg))) return;
+
+    logger.error({ err: err.error, update: err.ctx?.update?.update_id, code }, "Bot error");
   });
 
   return bot;

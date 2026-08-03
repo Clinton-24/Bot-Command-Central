@@ -187,7 +187,7 @@ export function registerCardShopCallbacks(bot: MyBot): void {
     await ctx.editMessageText(
       `🛍️ *${catLabel}*\n━━━━━━━━━━━━━━━━━━\n\n${products.length} product(s) available:`,
       { parse_mode: "Markdown", reply_markup: kb }
-    );
+    ).catch(() => {}); // ignore "message not modified" errors
   }
 
   bot.callbackQuery("cardshop:all", async (ctx) => {
