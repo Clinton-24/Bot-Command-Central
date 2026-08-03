@@ -356,11 +356,7 @@ export async function handleHexagonMessage(ctx: BotContext, input: string): Prom
       await ctx.reply(`⚡ *Agent Result*\n━━━━━━━━━━━━━━━━━━\n\n${actionResult}`, { parse_mode: "Markdown" });
     }
 
-    // Footer: model used + remaining quota
-    await ctx.reply(
-      `_Model: ${model.split("/")[1]?.split(":")[0] ?? model} · ${quota.remaining - 1} queries left today_`,
-      { parse_mode: "Markdown" }
-    );
+
   } catch (err) {
     await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
     await ctx.reply(`❌ *Hexagon error*\n\n${err instanceof Error ? err.message : "Unknown error"}`, { parse_mode: "Markdown" });
