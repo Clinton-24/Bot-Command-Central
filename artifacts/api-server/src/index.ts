@@ -6,6 +6,7 @@ import { webhookCallback } from "grammy";
 import cron from "node-cron";
 import { runExternalDbChecks } from "./bot/handlers/extdblogs";
 import { runMigrations } from "./lib/migrate";
+import { createCryptoBotRouter } from "./bot/handlers/cryptobot";
 
 // ── Port ──────────────────────────────────────────────────────────────────────
 
@@ -18,6 +19,9 @@ const port = Number(rawPort);
 const bot = getBotInstance();
 registerBatteryWebhook(app, bot);
 app.post("/bot", webhookCallback(bot, "express"));
+// CryptoBot webhook
+app.use("/api", createCryptoBotRouter(bot));
+
 app.get("/health", (_req, res) => {
   res.status(200).json({ status: "ok", uptime: process.uptime() });
 });

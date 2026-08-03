@@ -10,6 +10,7 @@ import {
 import type { MyBot } from "../index";
 import type { BotContext } from "../context";
 import { logger } from "../../lib/logger";
+import { createCryptoBotInvoice, CRYPTOBOT_ASSETS, type CryptoBotAsset } from "./cryptobot";
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const CATEGORY_EMOJIS: Record<string, string> = {
@@ -234,7 +235,7 @@ export function registerCardShopCallbacks(bot: MyBot): void {
     );
   });
 
-  // ── Choose payment coin ────────────────────────────────────────────────────
+  // ── Choose payment method ─────────────────────────────────────────────────
   bot.callbackQuery(/^cardshop:buy:(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
     const productId = parseInt(ctx.match[1]!);
@@ -247,28 +248,169 @@ export function registerCardShopCallbacks(bot: MyBot): void {
       return;
     }
 
+    const cryptoBotEnabled = !!process.env.CRYPTOBOT_API_TOKEN;
     const coins = await getAvailableCoins();
-    if (coins.length === 0) {
+
+    const kb = new InlineKeyboard();
+
+    // CryptoBot options (auto-verified)
+    if (cryptoBotEnabled) {
+      const assets: CryptoBotAsset[] = ["USDT", "TON", "BTC", "ETH", "LTC", "BNB", "TRX"];
+      const assetEmojis: Record<string, string> = {
+        USDT: "💚", TON: "💎", BTC: "🟠", ETH: "⬜", LTC: "🩶", BNB: "💛", TRX: "🔴",
+      };
+      for (const asset of assets) {
+        kb.text(`${assetEmojis[asset] ?? "💰"} ${asset} via CryptoBot ⚡`, `cardshop:cbpay:${productId}:${asset}`).row();
+      }
+    }
+
+    // Manual crypto options (if configured)
+    for (const coin of coins) {
+      const info = COIN_INFO[coin];
+      if (info) kb.text(`${info.emoji} ${coin} (manual)`, `cardshop:coinsel:${productId}:${coin}`).row();
+    }
+
+    if (!cryptoBotEnabled && coins.length === 0) {
       await ctx.editMessageText(
-        "⚠️ The shop owner hasn't configured payment addresses yet. Please try again later.",
+        "⚠️ Payments not configured yet. Please try again later.",
         { reply_markup: new InlineKeyboard().text("🛍️ Shop", "cardshop:main") }
       );
       return;
     }
 
-    const kb = new InlineKeyboard();
-    for (const coin of coins) {
-      const info = COIN_INFO[coin];
-      if (info) kb.text(`${info.emoji} ${coin}`, `cardshop:coinsel:${productId}:${coin}`).row();
-    }
     kb.text("❌ Cancel", "cardshop:main");
 
     await ctx.editMessageText(
       `🛒 *CHECKOUT*\n━━━━━━━━━━━━━━━━━━\n\n` +
-        `📦 ${p.name}\n💰 $${parseFloat(p.price).toFixed(2)}\n\n` +
-        `Select payment method:`,
+      `📦 ${p.name}\n💰 $${parseFloat(p.price).toFixed(2)}\n\n` +
+      `${cryptoBotEnabled ? "⚡ CryptoBot = instant auto-confirmation\n" : ""}` +
+      `Select payment method:`,
       { parse_mode: "Markdown", reply_markup: kb }
     );
+  });
+
+  // ── CryptoBot invoice creation ─────────────────────────────────────────────
+  bot.callbackQuery(/^cardshop:cbpay:(\d+):(.+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery("⏳ Creating invoice...");
+    const productId = parseInt(ctx.match[1]!);
+    const asset = ctx.match[2] as CryptoBotAsset;
+    const userId = ctx.from!.id;
+
+    const [p] = await db.select().from(productsTable).where(eq(productsTable.id, productId));
+    if (!p || !p.isActive) {
+      await ctx.editMessageText("❌ Product no longer available.", {
+        reply_markup: new InlineKeyboard().text("🛍️ Shop", "cardshop:main"),
+      });
+      return;
+    }
+
+    // Create order first
+    const [order] = await db
+      .insert(ordersTable)
+      .values({ userId, productId, quantity: 1, status: "pending" })
+      .returning();
+    if (!order) {
+      await ctx.editMessageText("❌ Failed to create order. Please try again.");
+      return;
+    }
+
+    try {
+      const invoice = await createCryptoBotInvoice({
+        asset,
+        amount: parseFloat(p.price),
+        orderId: order.id,
+        productName: p.name,
+        userId,
+      });
+
+      // Save payment request
+      await db.insert(paymentRequestsTable).values({
+        orderId: order.id,
+        coin: asset,
+        address: invoice.invoice_id.toString(),
+        amount: invoice.amount,
+        reference: `CB-${invoice.invoice_id}`,
+        status: "pending",
+      });
+
+      const assetEmojis: Record<string, string> = {
+        USDT: "💚", TON: "💎", BTC: "🟠", ETH: "⬜", LTC: "🩶", BNB: "💛", TRX: "🔴",
+      };
+
+      await ctx.editMessageText(
+        `💳 *PAY WITH CRYPTOBOT*\n━━━━━━━━━━━━━━━━━━\n\n` +
+        `📦 ${p.name}\n` +
+        `🔖 Order: *#${order.id}*\n\n` +
+        `${assetEmojis[asset] ?? "💰"} Amount: *${invoice.amount} ${asset}*\n\n` +
+        `Tap the button below to pay securely via @CryptoBot:\n` +
+        `_Payment is auto-confirmed — no manual steps needed._`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: new InlineKeyboard()
+            .url("💳 Pay Now via CryptoBot", invoice.bot_invoice_url)
+            .row()
+            .text("🔄 Check Payment", `cardshop:cbcheck:${order.id}:${invoice.invoice_id}`)
+            .text("❌ Cancel", `cardshop:ordcancel:${order.id}`),
+        }
+      );
+
+      // Notify owner
+      const ownerId = parseInt(process.env.BOT_OWNER_ID ?? "0");
+      if (ownerId) {
+        await ctx.api.sendMessage(
+          ownerId,
+          `🛒 *NEW ORDER #${order.id}*\n━━━━━━━━━━━━━━━━━━\n\n` +
+          `👤 \`${userId}\`\n📦 ${p.name}\n` +
+          `${assetEmojis[asset] ?? "💰"} ${invoice.amount} ${asset} via CryptoBot\n\n` +
+          `_Auto-confirms on payment._`,
+          { parse_mode: "Markdown" }
+        ).catch(() => {});
+      }
+    } catch (err) {
+      logger.error({ err }, "CryptoBot invoice creation failed");
+      await db.update(ordersTable).set({ status: "cancelled" }).where(eq(ordersTable.id, order.id));
+      await ctx.editMessageText(
+        `❌ *Payment Error*\n\n${err instanceof Error ? err.message : "Failed to create invoice"}\n\n_Make sure CRYPTOBOT\_API\_TOKEN is set on Render._`,
+        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🛍️ Shop", "cardshop:main") }
+      );
+    }
+  });
+
+  // ── Manual CryptoBot payment check ────────────────────────────────────────
+  bot.callbackQuery(/^cardshop:cbcheck:(\d+):(\d+)$/, async (ctx) => {
+    await ctx.answerCallbackQuery("🔄 Checking...");
+    const orderId = parseInt(ctx.match[1]!);
+    const invoiceId = parseInt(ctx.match[2]!);
+
+    const { checkCryptoBotInvoice } = await import("./cryptobot");
+    const invoice = await checkCryptoBotInvoice(invoiceId);
+
+    if (!invoice) {
+      await ctx.reply("❌ Could not check payment status. Try again.");
+      return;
+    }
+
+    if (invoice.status === "paid") {
+      const [order] = await db.select().from(ordersTable).where(eq(ordersTable.id, orderId));
+      if (order && order.status !== "confirmed") {
+        const { createCryptoBotRouter } = await import("./cryptobot");
+        // Manually trigger delivery
+        await db.update(ordersTable).set({ status: "confirmed", updatedAt: new Date() }).where(eq(ordersTable.id, orderId));
+        await db.update(paymentRequestsTable).set({ status: "confirmed", confirmedAt: new Date() }).where(eq(paymentRequestsTable.orderId, orderId)).catch(() => {});
+        const [product] = await db.select().from(productsTable).where(eq(productsTable.id, order.productId));
+        let msg = `✅ *Payment Confirmed — Order #${orderId}*\n━━━━━━━━━━━━━━━━━━\n\n📦 ${product?.name ?? "Order"} confirmed!\n\n`;
+        if (product?.deliveryType === "auto" && product.deliveryContent) {
+          msg += `🎁 *Your delivery:*\n\n${product.deliveryContent}`;
+        } else {
+          msg += `⏳ Seller will deliver shortly.`;
+        }
+        await ctx.editMessageText(msg, { parse_mode: "Markdown" });
+      } else {
+        await ctx.reply("✅ Already confirmed.");
+      }
+    } else {
+      await ctx.reply(`⏳ Payment status: *${invoice.status}*\n\nPay via CryptoBot then tap check again.`, { parse_mode: "Markdown" });
+    }
   });
 
   // ── Coin selected → create order & show payment address ───────────────────

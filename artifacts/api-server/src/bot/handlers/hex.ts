@@ -691,6 +691,33 @@ export function registerHexCallbacks(bot: MyBot): void {
   });
 
   // ── Payment settings ───────────────────────────────────────────────────────
+  // ── CryptoBot setup info ──────────────────────────────────────────────────
+  bot.callbackQuery("hex:cryptobot_setup", async (ctx) => {
+    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
+    await ctx.answerCallbackQuery();
+    const isSet = !!process.env.CRYPTOBOT_API_TOKEN;
+    await ctx.editMessageText(
+      `🤖 *CRYPTOBOT SETUP*\n━━━━━━━━━━━━━━━━━━\n\n` +
+      `Status: ${isSet ? "✅ *Configured*" : "❌ *Not configured*"}\n\n` +
+      `*How to set up:*\n` +
+      `1. Open @CryptoBot on Telegram\n` +
+      `2. Tap /pay → *Create App*\n` +
+      `3. Copy your *API Token*\n` +
+      `4. Go to Render → Environment → Add:\n` +
+      `   \`CRYPTOBOT_API_TOKEN\` = your token\n\n` +
+      `*Webhook URL to set in CryptoBot:*\n` +
+      `\`${process.env.RENDER_EXTERNAL_URL ?? "https://your-app.onrender.com"}/api/cryptobot/webhook\`\n\n` +
+      `_Once set, payments auto-confirm — no manual work needed._`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: new InlineKeyboard()
+          .url("🤖 Open @CryptoBot", "https://t.me/CryptoBot")
+          .row()
+          .text("🔙 Payment Settings", "hex:payments"),
+      }
+    );
+  });
+
   bot.callbackQuery("hex:payments", async (ctx) => {
     if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔ Owner only."); return; }
     await ctx.answerCallbackQuery();
@@ -708,6 +735,8 @@ export function registerHexCallbacks(bot: MyBot): void {
       `${addrLine("BTC", s.btcAddress)}\n` +
       `${addrLine("ETH", s.ethAddress)}\n` +
       `${s.bnbXpub ? `🔑 xpub: ✅ _Unique addrs enabled_` : `🔑 xpub: ❌ _Not set (static addr)_`}\n\n` +
+      `━━━━━━━━━━━━━━━━━━\n` +
+      `🤖 *CryptoBot (Auto-Pay):* ${process.env.CRYPTOBOT_API_TOKEN ? "✅ _Configured_" : "❌ _Not set_"}\n` +
       `_Customers only see coins you've configured._`;
 
     await ctx.editMessageText(text, {
@@ -721,6 +750,8 @@ export function registerHexCallbacks(bot: MyBot): void {
         .text("⬜ Set ETH", "hex:set_eth")
         .row()
         .text("🔑 Set xpub (unique addrs)", "hex:set_xpub")
+        .row()
+        .text("🤖 CryptoBot Setup", "hex:cryptobot_setup")
         .row()
         .text("🔙 Hex Panel", "hex:main"),
     });
