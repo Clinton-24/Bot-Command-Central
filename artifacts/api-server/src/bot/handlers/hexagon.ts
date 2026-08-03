@@ -21,15 +21,14 @@ import { logger } from "../../lib/logger";
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 
-// Priority fallback list — verified available as of August 2026
-// Rotated automatically if one is rate-limited or delisted
+// Priority fallback list — verified live August 2026
 const FREE_MODELS = [
-  "google/gemini-2.0-flash-exp:free",   // Google Gemini 2.0 Flash — fast, reliable
-  "meta-llama/llama-4-maverick:free",   // Llama 4 Maverick — strong general chat
-  "meta-llama/llama-4-scout:free",      // Llama 4 Scout — fast, lightweight
-  "deepseek/deepseek-v4-flash:free",    // DeepSeek V4 Flash — 1M context
-  "openai/gpt-oss-120b:free",           // GPT OSS 120B — strong reasoning
-  "nvidia/nemotron-3-ultra:free",       // NVIDIA Nemotron — backup
+  "nvidia/nemotron-3-ultra-550b-a55b:free", // NVIDIA Nemotron Ultra — 1M ctx, top quality
+  "google/gemma-4-31b-it:free",             // Google Gemma 4 31B — fast, reliable
+  "google/gemma-4-26b-a4b-it:free",         // Google Gemma 4 26B — lightweight backup
+  "google/gemma-3-27b-it:free",             // Google Gemma 3 27B — stable fallback
+  "mistralai/mistral-small-3.2-24b-instruct:free", // Mistral Small — good chat
+  "cohere/command-r-plus:free",             // Cohere Command R+ — last resort
 ];
 
 // ── Daily quota ───────────────────────────────────────────────────────────────
