@@ -9,8 +9,24 @@
  */
 
 import { InlineKeyboard } from "grammy";
-import { eq, desc, gte, and, sql } from "drizzle-orm";
-import { db, productsTable, ordersTable, usersTable, groupMessagesTable, groupSettingsTable, warningsTable } from "@workspace/db";
+import { Pool } from "pg";
+import { eq, desc, gte, and, count } from "drizzle-orm";
+import {
+  accessTable,
+  blacklistTable,
+  crescentQuotaCreditsTable,
+  crescentQuotaPurchasesTable,
+  db,
+  dbLogsTable,
+  externalDbLogsTable,
+  groupMessagesTable,
+  groupSettingsTable,
+  meetingsTable,
+  ordersTable,
+  productsTable,
+  usersTable,
+  warningsTable,
+} from "@workspace/db";
 import type { MyBot } from "../index";
 import type { BotContext } from "../context";
 import { isOwner } from "../helpers";
@@ -105,6 +121,126 @@ async function buildGroupContext(chatId: number): Promise<string> {
     return `LAST 24H GROUP ACTIVITY (${messages.length} messages, ${byUser.size} users):\n${lines}`;
   } catch {
     return "Group data unavailable.";
+  }
+}
+
+async function buildHarmonyContext(): Promise<string> {
+  const externalDbUrl = process.env.EXTERNAL_DB_URL;
+  if (!externalDbUrl) return "HARMONY DB: not configured.";
+
+  const pool = new Pool({
+    connectionString: externalDbUrl,
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 5000,
+    max: 1,
+  });
+
+  try {
+    const [tablesResult, columnsResult] = await Promise.all([
+      pool.query<{ table_name: string; estimated_rows: string | number }>(`
+        SELECT c.relname AS table_name,
+               COALESCE(s.n_live_tup, 0)::bigint AS estimated_rows
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
+        WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+        ORDER BY c.relname
+      `),
+      pool.query<{ table_name: string; column_name: string; data_type: string }>(`
+        SELECT table_name, column_name, data_type
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+        ORDER BY table_name, ordinal_position
+      `),
+    ]);
+
+    const columnsByTable = new Map<string, string[]>();
+    for (const column of columnsResult.rows) {
+      const columns = columnsByTable.get(column.table_name) ?? [];
+      columns.push(`${column.column_name}:${column.data_type}`);
+      columnsByTable.set(column.table_name, columns);
+    }
+
+    const tableLines = tablesResult.rows.map((table) => {
+      const columns = columnsByTable.get(table.table_name)?.join(", ") ?? "no columns reported";
+      return `• ${table.table_name} (~${Number(table.estimated_rows)} rows) — ${columns}`;
+    });
+
+    return [
+      "HARMONY DB SCHEMA (read-only metadata; no credentials or row values included):",
+      tableLines.length > 0 ? tableLines.join("\n") : "No public tables found.",
+    ].join("\n");
+  } catch (err) {
+    logger.warn({ err }, "Crescent could not inspect Harmony DB metadata");
+    return "HARMONY DB: configured but schema metadata is unavailable.";
+  } finally {
+    await pool.end().catch(() => {});
+  }
+}
+
+async function buildBotContext(): Promise<string> {
+  try {
+    const [
+      users,
+      access,
+      products,
+      orders,
+      groups,
+      groupSettings,
+      warnings,
+      blacklist,
+      meetings,
+      botLogs,
+      harmonyLogs,
+      quotaPurchases,
+      quotaCredits,
+    ] = await Promise.all([
+      db.select({ total: count() }).from(usersTable),
+      db.select({ total: count() }).from(accessTable),
+      db.select({ total: count() }).from(productsTable),
+      db.select({ total: count() }).from(ordersTable),
+      db.select({ total: count() }).from(groupMessagesTable),
+      db.select({ total: count() }).from(groupSettingsTable),
+      db.select({ total: count() }).from(warningsTable),
+      db.select({ total: count() }).from(blacklistTable),
+      db.select({ total: count() }).from(meetingsTable),
+      db.select({ status: dbLogsTable.status, message: dbLogsTable.message }).from(dbLogsTable).orderBy(desc(dbLogsTable.createdAt)).limit(8),
+      db.select({ status: externalDbLogsTable.status, checkType: externalDbLogsTable.checkType, message: externalDbLogsTable.message }).from(externalDbLogsTable).orderBy(desc(externalDbLogsTable.createdAt)).limit(8),
+      db.select({ total: count() }).from(crescentQuotaPurchasesTable),
+      db.select({ total: count() }).from(crescentQuotaCreditsTable),
+    ]);
+
+    const total = (rows: Array<{ total: number }>): number => rows[0]?.total ?? 0;
+    const botLogsText = botLogs.length === 0
+      ? "No recent bot DB logs."
+      : botLogs.map((log) => `• ${log.status}: ${log.message}`).join("\n");
+    const harmonyLogsText = harmonyLogs.length === 0
+      ? "No recent Harmony health logs."
+      : harmonyLogs.map((log) => `• ${log.status} ${log.checkType}: ${log.message}`).join("\n");
+    const harmonyContext = await buildHarmonyContext();
+
+    return [
+      "BOT DATA SNAPSHOT (read-only aggregate data):",
+      `• Registered users: ${total(users)}`,
+      `• Access records: ${total(access)}`,
+      `• Products: ${total(products)}`,
+      `• Orders: ${total(orders)}`,
+      `• Recorded group messages: ${total(groups)}`,
+      `• Configured groups: ${total(groupSettings)}`,
+      `• Warnings: ${total(warnings)}`,
+      `• Blacklisted terms: ${total(blacklist)}`,
+      `• Meetings: ${total(meetings)}`,
+      `• Quota purchases: ${total(quotaPurchases)}`,
+      `• Quota accounts: ${total(quotaCredits)}`,
+      "RECENT BOT DB LOGS:",
+      botLogsText,
+      "RECENT HARMONY HEALTH LOGS:",
+      harmonyLogsText,
+      harmonyContext,
+    ].join("\n");
+  } catch (err) {
+    logger.warn({ err }, "Crescent could not build bot context");
+    return `BOT DATA SNAPSHOT: unavailable.\n${await buildHarmonyContext()}`;
   }
 }
 
@@ -421,12 +557,15 @@ async function runGroupAnalysis(ctx: BotContext, bot: MyBot): Promise<void> {
 
   try {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const messages = await db
-      .select()
-      .from(groupMessagesTable)
-      .where(and(eq(groupMessagesTable.chatId, chatId), gte(groupMessagesTable.createdAt, since)))
-      .orderBy(groupMessagesTable.createdAt)
-      .limit(300);
+    const [messages, botContext] = await Promise.all([
+      db
+        .select()
+        .from(groupMessagesTable)
+        .where(and(eq(groupMessagesTable.chatId, chatId), gte(groupMessagesTable.createdAt, since)))
+        .orderBy(groupMessagesTable.createdAt)
+        .limit(300),
+      buildBotContext(),
+    ]);
 
     if (messages.length < 5) {
       await ctx.api.deleteMessage(chatId, thinking.message_id).catch(() => {});
@@ -434,7 +573,6 @@ async function runGroupAnalysis(ctx: BotContext, bot: MyBot): Promise<void> {
       return;
     }
 
-    // Build analysis prompt
     const transcript = messages
       .map((m) => `[${m.firstName ?? m.username ?? m.userId}]: ${m.message}`)
       .join("\n");
@@ -442,25 +580,30 @@ async function runGroupAnalysis(ctx: BotContext, bot: MyBot): Promise<void> {
     const { reply } = await callOpenRouter([
       {
         role: "system",
-        content: `You are CRESCENT, an expert group behaviour analyst. Analyse the following Telegram group conversation from the last 24 hours. Provide:
-1. ACTIVITY SUMMARY — total messages, active users, peak times
+        content: `You are CRESCENT, an expert group behaviour analyst and Bot-Command-Central operations analyst. Analyse the Telegram group and the bot snapshot provided below. Provide:
+1. GROUP ACTIVITY — total messages, active users, peak times, and conversation themes
 2. USER PROFILES — brief behaviour profile for each active user (tone, topics, activity level)
 3. SENTIMENT — overall group mood
-4. RED FLAGS — any suspicious, spammy, or toxic patterns
-5. RECOMMENDATIONS — what the admin should do
+4. RED FLAGS — suspicious, spammy, or toxic patterns, clearly separating evidence from uncertainty
+5. BOT OVERVIEW — explain what the bot's data and connected Harmony DB indicate about usage, health, and configuration
+6. RECOMMENDATIONS — concrete actions for the admin
 
-Be concise, sharp, and insightful. Use bullet points. Today: ${new Date().toDateString()}`
+Use only the supplied data. Do not invent records, credentials, or database contents. Treat database metadata and logs as read-only context. Be concise, sharp, and insightful. Today: ${new Date().toDateString()}
+
+${botContext}`
       },
-      { role: "user", content: `Analyse this conversation:\n\n${transcript.slice(0, 8000)}` }
+      { role: "user", content: `Analyse this conversation from the last 24 hours:\n\n${transcript.slice(0, 8000)}` }
     ]);
 
     await ctx.api.deleteMessage(chatId, thinking.message_id).catch(() => {});
 
-    const chunks = split(`📊 *GROUP ANALYSIS REPORT*\n━━━━━━━━━━━━━━━━━━\n_Last 24 hours · ${messages.length} messages · ${new Set(messages.map((m) => m.userId)).size} users_\n\n${reply}`);
+    const header = `📊 GROUP + BOT ANALYSIS REPORT\n━━━━━━━━━━━━━━━━━━\nLast 24 hours · ${messages.length} messages · ${new Set(messages.map((m) => m.userId)).size} users`;
+    const chunks = split(`${header}\n\n${reply}`);
     for (const chunk of chunks) {
-      await ctx.reply(chunk, { parse_mode: "Markdown" });
+      await ctx.reply(chunk);
     }
   } catch (err) {
+    logger.error({ err, chatId }, "Group analysis failed");
     await ctx.api.deleteMessage(chatId, thinking.message_id).catch(() => {});
     await ctx.reply(`❌ Analysis failed: ${err instanceof Error ? err.message : "Unknown"}`);
   }
