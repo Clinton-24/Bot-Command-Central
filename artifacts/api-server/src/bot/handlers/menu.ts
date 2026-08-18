@@ -198,7 +198,7 @@ export function registerMenuHandlers(bot: MyBot): void {
       `📅 *Meetings*\n` +
       `/schedule · /meetings\n\n` +
       `🤖 *Crescent AI*\n` +
-      `/hexagon · /ai [question]\n` +
+      `/crescent · /ai [question]\n` +
       (isOwnerUser
         ? `/email [brief] · /remind <time> <msg>\n` +
           `/reminders · /digest · /battery\n`

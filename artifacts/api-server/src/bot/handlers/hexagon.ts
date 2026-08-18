@@ -503,7 +503,7 @@ export async function sendDailyGroupDigest(bot: MyBot, chatId: number, ownerId: 
 // ── Register ──────────────────────────────────────────────────────────────────
 
 export function registerHexagonHandlers(bot: MyBot): void {
-  bot.command("hexagon", async (ctx) => {
+  bot.command("crescent", async (ctx) => {
     if (!ctx.from || !(await checkAccess(ctx, "free"))) return;
     const input = ctx.match?.trim();
     if (!input) {
@@ -685,7 +685,7 @@ export async function sendDailyDigest(userId: number, bot: MyBot): Promise<void>
 
     const quota = await getCrescentQuotaStatus(userId);
     digest += `\n🤖 *CRESCENT AI*\n• Quota: ${quota.unlimited ? "Unlimited" : formatCrescentQuota(quota)}\n`;
-    digest += `\n_Have a productive day! /hexagon to chat._`;
+    digest += `\n_Have a productive day! /crescent to chat._`;
 
     await bot.api.sendMessage(userId, digest, { parse_mode: "Markdown" });
   } catch (err) {
