@@ -38,6 +38,36 @@ export async function runMigrations(): Promise<void> {
       );
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS crescent_quota_purchases (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        credits INTEGER NOT NULL DEFAULT 20,
+        amount NUMERIC(10, 2) NOT NULL DEFAULT 2.00,
+        asset TEXT NOT NULL,
+        invoice_id INTEGER UNIQUE,
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        confirmed_at TIMESTAMP
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS crescent_quota_credits (
+        user_id BIGINT PRIMARY KEY,
+        credits INTEGER NOT NULL DEFAULT 0,
+        daily_date TEXT,
+        daily_used INTEGER NOT NULL DEFAULT 0,
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      ALTER TABLE crescent_quota_credits
+        ADD COLUMN IF NOT EXISTS daily_date TEXT,
+        ADD COLUMN IF NOT EXISTS daily_used INTEGER NOT NULL DEFAULT 0;
+    `);
+
     logger.info("Migrations complete ✅");
   } catch (err) {
     logger.error({ err }, "Migration failed ❌");

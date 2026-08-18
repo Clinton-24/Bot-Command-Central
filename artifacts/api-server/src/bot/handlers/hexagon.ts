@@ -14,7 +14,19 @@ import { db, productsTable, ordersTable, usersTable, groupMessagesTable, groupSe
 import type { MyBot } from "../index";
 import type { BotContext } from "../context";
 import { isOwner } from "../helpers";
+import { checkAccess } from "./access";
 import { logger } from "../../lib/logger";
+import { createCryptoBotInvoice, type CryptoBotAsset } from "./cryptobot";
+import {
+  CRESCENT_DAILY_LIMIT,
+  CRESCENT_TOPUP_CREDITS,
+  CRESCENT_TOPUP_PRICE,
+  consumeCrescentQuota,
+  createCrescentQuotaPurchase,
+  attachCrescentQuotaInvoice,
+  formatCrescentQuota,
+  getCrescentQuotaStatus,
+} from "./crescent-quota";
 
 // ── OpenRouter ────────────────────────────────────────────────────────────────
 
@@ -31,33 +43,7 @@ const FREE_MODELS = [
   "cohere/command-r-plus:free",             // Cohere Command R+ — last resort
 ];
 
-// ── Daily quota ───────────────────────────────────────────────────────────────
-
-const DAILY_LIMIT = 50;
-const usageMap = new Map<number, { count: number; date: string }>();
-
-function todayStr(): string {
-  return new Date().toLocaleDateString("en-KE", { timeZone: "Africa/Nairobi" });
-}
-
-function checkAndIncrementQuota(userId: number): { allowed: boolean; used: number; limit: number } {
-  const today = todayStr();
-  const entry = usageMap.get(userId);
-  if (!entry || entry.date !== today) {
-    usageMap.set(userId, { count: 1, date: today });
-    return { allowed: true, used: 1, limit: DAILY_LIMIT };
-  }
-  if (entry.count >= DAILY_LIMIT) return { allowed: false, used: entry.count, limit: DAILY_LIMIT };
-  entry.count++;
-  return { allowed: true, used: entry.count, limit: DAILY_LIMIT };
-}
-
-function getQuotaStatus(userId: number): { used: number; limit: number; remaining: number } {
-  const today = todayStr();
-  const entry = usageMap.get(userId);
-  if (!entry || entry.date !== today) return { used: 0, limit: DAILY_LIMIT, remaining: DAILY_LIMIT };
-  return { used: entry.count, limit: DAILY_LIMIT, remaining: DAILY_LIMIT - entry.count };
-}
+// ── Quota ─────────────────────────────────────────────────────────────────────
 
 // ── Context builders ──────────────────────────────────────────────────────────
 
@@ -346,11 +332,20 @@ function hexagonMenuKeyboard(): InlineKeyboard {
     .text("🏠 Main Menu", "menu:main");
 }
 
+function quotaTopupKeyboard(): InlineKeyboard {
+  const keyboard = new InlineKeyboard();
+  if (process.env.CRYPTOBOT_API_TOKEN) {
+    keyboard.text(`💳 Buy +${CRESCENT_TOPUP_CREDITS} for $${CRESCENT_TOPUP_PRICE}`, "crescent:topup").row();
+  }
+  return keyboard.text("🤖 Crescent", "menu:hexagon");
+}
+
 // ── Public handler ────────────────────────────────────────────────────────────
 
 export async function handleHexagonMessage(ctx: BotContext, input: string): Promise<void> {
   const userId = ctx.from!.id;
   if (wasAlreadyHandled(ctx.update.update_id)) return;
+  if (!(await checkAccess(ctx, "free"))) return;
 
   if (activeHexagonUsers.has(userId)) {
     await ctx.reply("⏳ Crescent is still processing your previous request. Please wait for the response.");
@@ -360,17 +355,18 @@ export async function handleHexagonMessage(ctx: BotContext, input: string): Prom
   activeHexagonUsers.add(userId);
 
   try {
-    const quota = checkAndIncrementQuota(userId);
+    const quota = await consumeCrescentQuota(userId);
 
     if (!quota.allowed) {
       await ctx.reply(
-        `⛔ *Daily limit reached*\n━━━━━━━━━━━━━━━━━━\n\nYou've used ${quota.used}/${quota.limit} queries today.\n\n_Resets at midnight Nairobi time._`,
-        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🤖 Crescent", "menu:hexagon") }
+        `⛔ *Daily quota reached*\n━━━━━━━━━━━━━━━━━━\n\nYou've used ${quota.used}/${CRESCENT_DAILY_LIMIT} daily queries.\nYou have no bonus queries remaining.\n\nBuy ${CRESCENT_TOPUP_CREDITS} extra queries for $${CRESCENT_TOPUP_PRICE}.`,
+        { parse_mode: "Markdown", reply_markup: quotaTopupKeyboard() }
       );
       return;
     }
 
-    const thinking = await ctx.reply(`🧠 _Crescent thinking... (${quota.used}/${quota.limit})_`, { parse_mode: "Markdown" });
+    const quotaLabel = quota.unlimited ? "Unlimited" : formatCrescentQuota(quota);
+    const thinking = await ctx.reply(`🧠 _Crescent thinking... (${quotaLabel})_`, { parse_mode: "Markdown" });
 
     try {
       const { reply, actionResult } = await askHexagon(userId, input, ctx);
@@ -508,12 +504,13 @@ export async function sendDailyGroupDigest(bot: MyBot, chatId: number, ownerId: 
 
 export function registerHexagonHandlers(bot: MyBot): void {
   bot.command("hexagon", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.reply("⛔ Owner only."); return; }
+    if (!ctx.from || !(await checkAccess(ctx, "free"))) return;
     const input = ctx.match?.trim();
     if (!input) {
-      const { used, limit, remaining } = getQuotaStatus(ctx.from.id);
+      const quota = await getCrescentQuotaStatus(ctx.from.id);
+      const quotaText = quota.unlimited ? "Unlimited" : formatCrescentQuota(quota);
       await ctx.reply(
-        `🤖 *CRESCENT AI AGENT*\n━━━━━━━━━━━━━━━━━━\n\n_Elite AI · Shop-aware · Group analyst · Task agent_\n\n📊 Today: *${used}/${limit}* queries used · *${remaining}* remaining\n\nAsk me anything or use the menu:`,
+        `🤖 *CRESCENT AI AGENT*\n━━━━━━━━━━━━━━━━━━\n\n_Elite AI · Shop-aware · Group analyst · Task agent_\n\n📊 Quota: *${quotaText}*\n\nAsk me anything or use the menu:`,
         { parse_mode: "Markdown", reply_markup: hexagonMenuKeyboard() }
       );
       return;
@@ -522,14 +519,14 @@ export function registerHexagonHandlers(bot: MyBot): void {
   });
 
   bot.command("ai", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) return;
+    if (!ctx.from || !(await checkAccess(ctx, "free"))) return;
     const input = ctx.match?.trim();
     if (!input) { await ctx.reply("Usage: /ai [question]"); return; }
     await handleHexagonMessage(ctx, input);
   });
 
   bot.command("clearai", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) return;
+    if (!ctx.from || !(await checkAccess(ctx, "free"))) return;
     history.delete(ctx.from.id);
     await ctx.reply("🧹 Crescent memory cleared.");
   });
@@ -542,24 +539,68 @@ export function registerHexagonHandlers(bot: MyBot): void {
 
 export function registerHexagonCallbacks(bot: MyBot): void {
   bot.callbackQuery("menu:hexagon", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔ Owner only."); return; }
+    if (!ctx.from || !(await checkAccess(ctx, "free"))) { await ctx.answerCallbackQuery("⛔"); return; }
     await ctx.answerCallbackQuery();
-    const { used, limit, remaining } = getQuotaStatus(ctx.from.id);
+    const quota = await getCrescentQuotaStatus(ctx.from.id);
+    const quotaText = quota.unlimited ? "Unlimited" : formatCrescentQuota(quota);
     await ctx.editMessageText(
-      `🤖 *CRESCENT AI AGENT*\n━━━━━━━━━━━━━━━━━━\n\n_Elite AI · Shop-aware · Group analyst · Task agent_\n\n📊 Today: *${used}/${limit}* queries used · *${remaining}* remaining\n\nAsk me anything or use the menu:`,
+      `🤖 *CRESCENT AI AGENT*\n━━━━━━━━━━━━━━━━━━\n\n_Elite AI · Shop-aware · Group analyst · Task agent_\n\n📊 Quota: *${quotaText}*\n\nAsk me anything or use the menu:`,
       { parse_mode: "Markdown", reply_markup: hexagonMenuKeyboard() }
     );
   });
 
+  bot.callbackQuery("crescent:topup", async (ctx) => {
+    if (!ctx.from || !(await checkAccess(ctx, "free"))) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!process.env.CRYPTOBOT_API_TOKEN) {
+      await ctx.answerCallbackQuery("Payments are not configured.");
+      await ctx.reply("⚠️ Crypto payments are not configured yet. Please contact the owner.");
+      return;
+    }
+
+    await ctx.answerCallbackQuery("⏳ Creating payment...");
+    const userId = ctx.from.id;
+    const asset: CryptoBotAsset = "USDT";
+    const purchase = await createCrescentQuotaPurchase(userId, asset);
+
+    try {
+      const invoice = await createCryptoBotInvoice({
+        asset,
+        amount: CRESCENT_TOPUP_PRICE,
+        purchaseId: purchase.id,
+        productName: `Crescent +${CRESCENT_TOPUP_CREDITS} queries`,
+        userId,
+      });
+      await attachCrescentQuotaInvoice(purchase.id, invoice.invoice_id);
+      await ctx.editMessageText(
+        `💳 *CRESCENT QUOTA TOP-UP*\n━━━━━━━━━━━━━━━━━━\n\n` +
+          `Add *${CRESCENT_TOPUP_CREDITS} queries* for *$${CRESCENT_TOPUP_PRICE} USD*\n` +
+          `Payment asset: *${asset}*\n\n` +
+          `Your bonus queries are added automatically after CryptoBot confirms payment.`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: new InlineKeyboard()
+            .url("💳 Pay with CryptoBot", invoice.bot_invoice_url)
+            .row()
+            .text("🤖 Crescent", "menu:hexagon"),
+        },
+      );
+    } catch (err) {
+      logger.error({ err, purchaseId: purchase.id }, "Crescent quota invoice creation failed");
+      await ctx.editMessageText("❌ Could not create the quota payment. Please try again later.", {
+        reply_markup: new InlineKeyboard().text("🤖 Crescent", "menu:hexagon"),
+      });
+    }
+  });
+
   bot.callbackQuery("hexagon:chat", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!ctx.from || !(await checkAccess(ctx, "free"))) { await ctx.answerCallbackQuery("⛔"); return; }
     ctx.session.pendingAction = "hexagon:input";
     await ctx.answerCallbackQuery();
     await ctx.reply("💬 *Chat with Crescent*\n\nType your message:", { parse_mode: "Markdown" });
   });
 
   bot.callbackQuery("hexagon:shop", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!ctx.from || !(await checkAccess(ctx, "free"))) { await ctx.answerCallbackQuery("⛔"); return; }
     ctx.session.pendingAction = "hexagon:input";
     await ctx.answerCallbackQuery();
     await ctx.reply("🛍️ *Shop Q&A*\n\nAsk about products, orders, pricing, or stock:\n\n_e.g. \"Which products are low on stock?\" or \"Summarise today's orders\"_", { parse_mode: "Markdown" });
@@ -582,18 +623,19 @@ export function registerHexagonCallbacks(bot: MyBot): void {
   });
 
   bot.callbackQuery("hexagon:usage", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!ctx.from || !(await checkAccess(ctx, "free"))) { await ctx.answerCallbackQuery("⛔"); return; }
     await ctx.answerCallbackQuery();
-    const { used, limit, remaining } = getQuotaStatus(ctx.from.id);
-    const bar = "█".repeat(Math.round((used / limit) * 10)) + "░".repeat(10 - Math.round((used / limit) * 10));
+    const quota = await getCrescentQuotaStatus(ctx.from.id);
+    const quotaText = quota.unlimited ? "Unlimited" : formatCrescentQuota(quota);
+    const bar = quota.unlimited ? "██████████" : "█".repeat(Math.min(10, Math.round((quota.used / quota.limit) * 10))) + "░".repeat(Math.max(0, 10 - Math.round((quota.used / quota.limit) * 10)));
     await ctx.editMessageText(
-      `📊 *CRESCENT USAGE*\n━━━━━━━━━━━━━━━━━━\n\n${bar}\n*${used}/${limit}* queries today\n*${remaining}* remaining\n\n_Resets midnight Nairobi time_\n_Free models: ${FREE_MODELS.length} in fallback pool_`,
+      `📊 *CRESCENT USAGE*\n━━━━━━━━━━━━━━━━━━\n\n${bar}\n*${quotaText}*\n\n_Resets midnight Nairobi time_\n_Free models: ${FREE_MODELS.length} in fallback pool_`,
       { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🔙 Back", "menu:hexagon") }
     );
   });
 
   bot.callbackQuery("hexagon:clear", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery(); return; }
+    if (!ctx.from || !(await checkAccess(ctx, "free"))) { await ctx.answerCallbackQuery(); return; }
     history.delete(ctx.from.id);
     await ctx.answerCallbackQuery("🧹 Cleared");
     await ctx.editMessageText(
@@ -641,8 +683,8 @@ export async function sendDailyDigest(userId: number, bot: MyBot): Promise<void>
     digest += `🛍️ *SHOP SNAPSHOT*\n• Active products: ${products.length}\n`;
     if (lowStock.length > 0) digest += `• ⚠️ Low stock: ${lowStock.map((p) => p.name).join(", ")}\n`;
 
-    const { used, limit } = getQuotaStatus(userId);
-    digest += `\n🤖 *CRESCENT AI*\n• Queries today: ${used}/${limit}\n`;
+    const quota = await getCrescentQuotaStatus(userId);
+    digest += `\n🤖 *CRESCENT AI*\n• Quota: ${quota.unlimited ? "Unlimited" : formatCrescentQuota(quota)}\n`;
     digest += `\n_Have a productive day! /hexagon to chat._`;
 
     await bot.api.sendMessage(userId, digest, { parse_mode: "Markdown" });

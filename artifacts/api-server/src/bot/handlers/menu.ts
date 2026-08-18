@@ -21,9 +21,10 @@ export function mainMenuKeyboard(userId?: number): InlineKeyboard {
     .text("📅 Meetings", "menu:meetings")
     .row();
 
+  kb.text("🤖 Crescent AI", "menu:hexagon").row();
+
   if (userId && isOwner(userId)) {
-    kb.text("🤖 Hexagon AI", "menu:hexagon")
-      .text("🔮 Hex Panel", "hex:main")
+    kb.text("🔮 Hex Panel", "hex:main")
       .row()
       .text("🗄️ Bank Logs", "dblogs:main")
       .row();
@@ -196,13 +197,13 @@ export function registerMenuHandlers(bot: MyBot): void {
       `/fb /insta /snap /pin [URL]\n\n` +
       `📅 *Meetings*\n` +
       `/schedule · /meetings\n\n` +
+      `🤖 *Crescent AI*\n` +
+      `/hexagon · /ai [question]\n` +
       (isOwnerUser
-        ? `🤖 *Crescent AI (owner)*\n` +
-          `/hexagon · /ai [question]\n` +
-          `/email [brief] · /remind <time> <msg>\n` +
-          `/reminders · /digest · /battery\n` +
-          `/clearai\n\n`
+        ? `/email [brief] · /remind <time> <msg>\n` +
+          `/reminders · /digest · /battery\n`
         : "") +
+      `/clearai\n\n` +
       `👥 *Group Admin*\n` +
       `/warn · /ban · /mute · /unban · /unmute\n` +
       `/bl · /unbl · /bllist\n` +
