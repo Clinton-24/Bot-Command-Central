@@ -235,7 +235,7 @@ async function executeAction(bot: MyBot, ownerId: number, action: AgentAction): 
       case "add_product": {
         const name = String(action.payload["name"] ?? "");
         const price = String(action.payload["price"] ?? "0");
-        const stock = Number(action.payload["stock"] ?? 0);
+        const stock = String(action.payload["stock"] ?? "0");
         const category = String(action.payload["category"] ?? "general");
         if (!name) return "⚠️ Product add failed: name required.";
         await db.insert(productsTable).values({ name, price, stock, category, isActive: true });
