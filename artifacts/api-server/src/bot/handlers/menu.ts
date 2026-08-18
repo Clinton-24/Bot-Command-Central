@@ -100,10 +100,12 @@ export function meetingsMenuKeyboard(): InlineKeyboard {
 
 export function registerMenuHandlers(bot: MyBot): void {
   // Note: bot instance is passed through for access control
-  bot.on("message:text", async (ctx, next) => {
-    // Log group messages for Crescent analyst
-    await logGroupMessage(ctx).catch(() => {});
+  bot.on("message", async (ctx, next) => {
+    await logGroupMessage(ctx);
+    return next();
+  });
 
+  bot.on("message:text", async (ctx, next) => {
     const text = ctx.message.text.trim();
     if (text.startsWith("/")) return next();
 

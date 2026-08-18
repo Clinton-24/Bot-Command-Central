@@ -537,14 +537,19 @@ export async function handleHexagonMessage(ctx: BotContext, input: string): Prom
 // ── Group message logger (call from bot message handler) ──────────────────────
 
 export async function logGroupMessage(ctx: BotContext): Promise<void> {
-  if (!ctx.message?.text || !ctx.from || ctx.chat?.type === "private") return;
+  const message = ctx.message;
+  if (!message || !ctx.from || ctx.chat?.type === "private") return;
+
+  const text = "text" in message ? message.text : "caption" in message ? message.caption : undefined;
+  if (!text?.trim()) return;
+
   try {
     await db.insert(groupMessagesTable).values({
       chatId: ctx.chat!.id,
       userId: ctx.from.id,
       username: ctx.from.username ?? null,
       firstName: ctx.from.first_name ?? null,
-      message: ctx.message.text.slice(0, 500),
+      message: text.trim().slice(0, 500),
     });
   } catch { /* non-critical */ }
 }
@@ -557,15 +562,16 @@ async function runGroupAnalysis(ctx: BotContext, bot: MyBot): Promise<void> {
 
   try {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const [messages, botContext] = await Promise.all([
+    const [latestMessages, botContext] = await Promise.all([
       db
         .select()
         .from(groupMessagesTable)
         .where(and(eq(groupMessagesTable.chatId, chatId), gte(groupMessagesTable.createdAt, since)))
-        .orderBy(groupMessagesTable.createdAt)
+        .orderBy(desc(groupMessagesTable.createdAt))
         .limit(300),
       buildBotContext(),
     ]);
+    const messages = latestMessages.reverse();
 
     if (messages.length < 5) {
       await ctx.api.deleteMessage(chatId, thinking.message_id).catch(() => {});
@@ -597,7 +603,7 @@ ${botContext}`
 
     await ctx.api.deleteMessage(chatId, thinking.message_id).catch(() => {});
 
-    const header = `📊 GROUP + BOT ANALYSIS REPORT\n━━━━━━━━━━━━━━━━━━\nLast 24 hours · ${messages.length} messages · ${new Set(messages.map((m) => m.userId)).size} users`;
+    const header = `📊 GROUP + BOT ANALYSIS REPORT\n━━━━━━━━━━━━━━━━━━\nLatest live window · ${messages.length} messages · ${new Set(messages.map((m) => m.userId)).size} users`;
     const chunks = split(`${header}\n\n${reply}`);
     for (const chunk of chunks) {
       await ctx.reply(chunk);
