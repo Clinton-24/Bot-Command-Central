@@ -23,7 +23,7 @@ export function registerEmailHandlers(bot: MyBot): void {
           `• /email ask the team to submit timesheets by EOD`,
         {
           parse_mode: "Markdown",
-          reply_markup: new InlineKeyboard().text("🤖 Hexagon", "menu:hexagon"),
+          reply_markup: new InlineKeyboard().text("🤖 Crescent", "menu:hexagon"),
         }
       );
       return;
@@ -51,7 +51,7 @@ export async function draftEmail(ctx: BotContext, brief: string): Promise<void> 
           .text("✏️ Revise", "email:revise")
           .text("📧 Another", "hexagon:email")
           .row()
-          .text("🤖 Hexagon", "menu:hexagon"),
+          .text("🤖 Crescent", "menu:hexagon"),
       }
     );
   } catch (err) {

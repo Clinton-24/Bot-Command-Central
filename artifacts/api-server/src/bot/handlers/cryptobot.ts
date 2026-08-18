@@ -19,6 +19,7 @@ import { eq } from "drizzle-orm";
 import { db, ordersTable, productsTable, paymentRequestsTable } from "@workspace/db";
 import type { MyBot } from "../index";
 import { logger } from "../../lib/logger";
+import { confirmCrescentQuotaPurchase } from "./crescent-quota";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
@@ -74,20 +75,27 @@ interface CryptoBotInvoice {
 export async function createCryptoBotInvoice(params: {
   asset: CryptoBotAsset;
   amount: number;
-  orderId: number;
+  orderId?: number;
+  purchaseId?: number;
   productName: string;
   userId: number;
 }): Promise<CryptoBotInvoice> {
+  const reference = params.purchaseId ? `Quota purchase #${params.purchaseId}` : `Order #${params.orderId}`;
+  const payload = params.purchaseId
+    ? { type: "crescent_quota", purchaseId: params.purchaseId, userId: params.userId }
+    : { orderId: params.orderId, userId: params.userId };
+  const startParameter = params.purchaseId ? `crescent_quota_${params.purchaseId}` : `order_${params.orderId}`;
+
   const invoice = await cryptoBotRequest<CryptoBotInvoice>("createInvoice", {
     asset: params.asset,
     amount: params.amount.toFixed(2),
-    description: `${params.productName} — Order #${params.orderId}`,
-    payload: JSON.stringify({ orderId: params.orderId, userId: params.userId }),
+    description: `${params.productName} — ${reference}`,
+    payload: JSON.stringify(payload),
     paid_btn_name: "callback",
-    paid_btn_url: `https://t.me/${process.env.BOT_USERNAME ?? "your_bot"}?start=order_${params.orderId}`,
+    paid_btn_url: `https://t.me/${process.env.BOT_USERNAME ?? "your_bot"}?start=${startParameter}`,
     allow_comments: false,
     allow_anonymous: false,
-    expires_in: 3600, // 1 hour
+    expires_in: 3600,
   });
 
   return invoice;
@@ -191,22 +199,34 @@ export function createCryptoBotRouter(bot: MyBot): Router {
       logger.info({ invoice_id: invoice.invoice_id, asset: invoice.asset, amount: invoice.amount }, "CryptoBot payment received");
 
       // Parse order info from payload
-      let orderId: number | null = null;
-      let userId: number | null = null;
-
+      let parsed: { type?: string; purchaseId?: number; orderId?: number; userId?: number };
       try {
-        const parsed = JSON.parse(invoice.payload ?? "{}") as { orderId?: number; userId?: number };
-        orderId = parsed.orderId ?? null;
-        userId = parsed.userId ?? null;
+        parsed = JSON.parse(invoice.payload ?? "{}") as typeof parsed;
       } catch {
         logger.warn({ payload: invoice.payload }, "Could not parse invoice payload");
+        return res.status(400).json({ ok: false, error: "Invalid invoice payload" });
       }
 
-      if (!orderId || !userId) {
+      if (parsed.type === "crescent_quota") {
+        if (!parsed.purchaseId || !parsed.userId) {
+          return res.status(400).json({ ok: false, error: "Missing quota purchase details" });
+        }
+        const granted = await confirmCrescentQuotaPurchase(parsed.purchaseId, parsed.userId, invoice.invoice_id);
+        if (granted) {
+          await bot.api.sendMessage(
+            parsed.userId,
+            `✅ *CRESCENT QUOTA ADDED*\n━━━━━━━━━━━━━━━━━━\n\n+20 queries have been added to your account.`,
+            { parse_mode: "Markdown" },
+          ).catch(() => {});
+        }
+        return res.json({ ok: true });
+      }
+
+      if (!parsed.orderId || !parsed.userId) {
         return res.status(400).json({ ok: false, error: "Missing orderId/userId in payload" });
       }
 
-      await deliverOrder(bot, orderId, userId);
+      await deliverOrder(bot, parsed.orderId, parsed.userId);
       return res.json({ ok: true });
     } catch (err) {
       logger.error({ err }, "CryptoBot webhook error");

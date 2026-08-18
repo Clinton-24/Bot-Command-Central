@@ -21,9 +21,10 @@ export function mainMenuKeyboard(userId?: number): InlineKeyboard {
     .text("📅 Meetings", "menu:meetings")
     .row();
 
+  kb.text("🤖 Crescent AI", "menu:hexagon").row();
+
   if (userId && isOwner(userId)) {
-    kb.text("🤖 Hexagon AI", "menu:hexagon")
-      .text("🔮 Hex Panel", "hex:main")
+    kb.text("🔮 Hex Panel", "hex:main")
       .row()
       .text("🗄️ Bank Logs", "dblogs:main")
       .row();
@@ -100,7 +101,7 @@ export function meetingsMenuKeyboard(): InlineKeyboard {
 export function registerMenuHandlers(bot: MyBot): void {
   // Note: bot instance is passed through for access control
   bot.on("message:text", async (ctx, next) => {
-    // Log group messages for Hexagon analyst
+    // Log group messages for Crescent analyst
     await logGroupMessage(ctx).catch(() => {});
 
     const text = ctx.message.text.trim();
@@ -196,13 +197,13 @@ export function registerMenuHandlers(bot: MyBot): void {
       `/fb /insta /snap /pin [URL]\n\n` +
       `📅 *Meetings*\n` +
       `/schedule · /meetings\n\n` +
+      `🤖 *Crescent AI*\n` +
+      `/hexagon · /ai [question]\n` +
       (isOwnerUser
-        ? `🤖 *Hexagon AI (owner)*\n` +
-          `/hexagon · /ai [question]\n` +
-          `/email [brief] · /remind <time> <msg>\n` +
-          `/reminders · /digest · /battery\n` +
-          `/clearai\n\n`
+        ? `/email [brief] · /remind <time> <msg>\n` +
+          `/reminders · /digest · /battery\n`
         : "") +
+      `/clearai\n\n` +
       `👥 *Group Admin*\n` +
       `/warn · /ban · /mute · /unban · /unmute\n` +
       `/bl · /unbl · /bllist\n` +
