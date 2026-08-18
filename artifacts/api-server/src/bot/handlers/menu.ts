@@ -100,7 +100,7 @@ export function meetingsMenuKeyboard(): InlineKeyboard {
 export function registerMenuHandlers(bot: MyBot): void {
   // Note: bot instance is passed through for access control
   bot.on("message:text", async (ctx, next) => {
-    // Log group messages for Hexagon analyst
+    // Log group messages for Crescent analyst
     await logGroupMessage(ctx).catch(() => {});
 
     const text = ctx.message.text.trim();
@@ -197,7 +197,7 @@ export function registerMenuHandlers(bot: MyBot): void {
       `📅 *Meetings*\n` +
       `/schedule · /meetings\n\n` +
       (isOwnerUser
-        ? `🤖 *Hexagon AI (owner)*\n` +
+        ? `🤖 *Crescent AI (owner)*\n` +
           `/hexagon · /ai [question]\n` +
           `/email [brief] · /remind <time> <msg>\n` +
           `/reminders · /digest · /battery\n` +

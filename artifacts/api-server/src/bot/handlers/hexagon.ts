@@ -1,5 +1,5 @@
 /**
- * HEXAGON — AI Agent for Bot-Command-Central
+ * CRESCENT — AI Agent for Bot-Command-Central
  * ─────────────────────────────────────────────
  * • Free model fallback loop (5 models)
  * • Daily quota: 50 queries/day (resets midnight Nairobi)
@@ -69,7 +69,18 @@ async function buildShopContext(): Promise<string> {
     ]);
     const productLines = products.length === 0
       ? "No active products."
-      : products.map((p) => `• ${p.name} | $${p.price} | Stock: ${p.stock} | Category: ${p.category}`).join("\n");
+      : products.map((p) => {
+          const stock = Number(p.stock);
+          const availability = stock === 0
+            ? "Unlimited"
+            : stock > 0
+              ? `${p.stock} available`
+              : "Out of stock";
+          const delivery = p.deliveryType === "auto" && p.deliveryContent
+            ? "Digital auto-delivery"
+            : "Manual delivery";
+          return `• ${p.name} | $${p.price} | Availability: ${availability} | Delivery: ${delivery} | Category: ${p.category}`;
+        }).join("\n");
     const orderLines = orders.length === 0
       ? "No recent orders."
       : orders.map((o) => `• Order #${o.id} | Product:${o.productId} | Qty:${o.quantity} | Status:${o.status}`).join("\n");
@@ -119,7 +130,7 @@ async function buildSystemPrompt(ctx?: BotContext): Promise<string> {
     ? await buildGroupContext(ctx.chat.id)
     : "";
 
-  return `You are HEXAGON, an elite AI agent embedded in a private Telegram bot called Bot-Command-Central.
+  return `You are CRESCENT, an elite AI agent embedded in a private Telegram bot called Bot-Command-Central.
 
 PERSONALITY: Sharp, direct, intelligent, slightly futuristic. No fluff. You are a high-performance assistant.
 
@@ -140,7 +151,9 @@ FORMAT RULES:
 - Keep replies concise for Telegram mobile (max ~300 words unless asked for more)
 - Use *bold* and _italic_ markdown
 - For code, wrap in \`backticks\`
-- Never make up product prices, stock, or order data — only use the live data above
+- Never make up product prices, availability, delivery method, or order data — only use the live data above
+- A product with stock 0 is intentionally unlimited availability, not out of stock
+- Digital products with auto-delivery content are available while they are active
 - Today: ${new Date().toLocaleDateString("en-KE", { timeZone: "Africa/Nairobi", weekday: "long", year: "numeric", month: "long", day: "numeric" })}`;
 }
 
@@ -160,7 +173,7 @@ async function callOpenRouter(
           "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
           "Content-Type": "application/json",
           "HTTP-Referer": "https://bot-command-central-1.onrender.com",
-          "X-Title": "Hexagon-AI",
+          "X-Title": "Crescent-AI",
         },
         body: JSON.stringify({ model, max_tokens: 1024, messages }),
       });
@@ -183,7 +196,7 @@ async function callOpenRouter(
       const reply = data.choices?.[0]?.message?.content?.trim() ?? "";
       if (!reply) { lastError = "Empty response"; continue; }
 
-      logger.info({ model }, "Hexagon responded");
+      logger.info({ model }, "Crescent responded");
       return { reply, model };
     } catch (err) {
       lastError = err instanceof Error ? err.message : "fetch error";
@@ -340,7 +353,7 @@ export async function handleHexagonMessage(ctx: BotContext, input: string): Prom
   if (wasAlreadyHandled(ctx.update.update_id)) return;
 
   if (activeHexagonUsers.has(userId)) {
-    await ctx.reply("⏳ Hexagon is still processing your previous request. Please wait for the response.");
+    await ctx.reply("⏳ Crescent is still processing your previous request. Please wait for the response.");
     return;
   }
 
@@ -352,12 +365,12 @@ export async function handleHexagonMessage(ctx: BotContext, input: string): Prom
     if (!quota.allowed) {
       await ctx.reply(
         `⛔ *Daily limit reached*\n━━━━━━━━━━━━━━━━━━\n\nYou've used ${quota.used}/${quota.limit} queries today.\n\n_Resets at midnight Nairobi time._`,
-        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🤖 Hexagon", "menu:hexagon") }
+        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🤖 Crescent", "menu:hexagon") }
       );
       return;
     }
 
-    const thinking = await ctx.reply(`🧠 _Hexagon thinking... (${quota.used}/${quota.limit})_`, { parse_mode: "Markdown" });
+    const thinking = await ctx.reply(`🧠 _Crescent thinking... (${quota.used}/${quota.limit})_`, { parse_mode: "Markdown" });
 
     try {
       const { reply, actionResult } = await askHexagon(userId, input, ctx);
@@ -367,7 +380,7 @@ export async function handleHexagonMessage(ctx: BotContext, input: string): Prom
       for (let i = 0; i < chunks.length; i++) {
         const isLast = i === chunks.length - 1;
         await ctx.reply(
-          (i === 0 ? `🤖 *HEXAGON*\n━━━━━━━━━━━━━━━━━━\n\n` : "") + chunks[i],
+          (i === 0 ? `🤖 *CRESCENT*\n━━━━━━━━━━━━━━━━━━\n\n` : "") + chunks[i],
           {
             parse_mode: "Markdown",
             reply_markup: isLast
@@ -382,7 +395,7 @@ export async function handleHexagonMessage(ctx: BotContext, input: string): Prom
       }
     } catch (err) {
       await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
-      await ctx.reply(`❌ *Hexagon error*\n\n${err instanceof Error ? err.message : "Unknown error"}`, { parse_mode: "Markdown" });
+      await ctx.reply(`❌ *Crescent error*\n\n${err instanceof Error ? err.message : "Unknown error"}`, { parse_mode: "Markdown" });
     }
   } finally {
     activeHexagonUsers.delete(userId);
@@ -433,7 +446,7 @@ async function runGroupAnalysis(ctx: BotContext, bot: MyBot): Promise<void> {
     const { reply } = await callOpenRouter([
       {
         role: "system",
-        content: `You are HEXAGON, an expert group behaviour analyst. Analyse the following Telegram group conversation from the last 24 hours. Provide:
+        content: `You are CRESCENT, an expert group behaviour analyst. Analyse the following Telegram group conversation from the last 24 hours. Provide:
 1. ACTIVITY SUMMARY — total messages, active users, peak times
 2. USER PROFILES — brief behaviour profile for each active user (tone, topics, activity level)
 3. SENTIMENT — overall group mood
@@ -500,7 +513,7 @@ export function registerHexagonHandlers(bot: MyBot): void {
     if (!input) {
       const { used, limit, remaining } = getQuotaStatus(ctx.from.id);
       await ctx.reply(
-        `🤖 *HEXAGON AI AGENT*\n━━━━━━━━━━━━━━━━━━\n\n_Elite AI · Shop-aware · Group analyst · Task agent_\n\n📊 Today: *${used}/${limit}* queries used · *${remaining}* remaining\n\nAsk me anything or use the menu:`,
+        `🤖 *CRESCENT AI AGENT*\n━━━━━━━━━━━━━━━━━━\n\n_Elite AI · Shop-aware · Group analyst · Task agent_\n\n📊 Today: *${used}/${limit}* queries used · *${remaining}* remaining\n\nAsk me anything or use the menu:`,
         { parse_mode: "Markdown", reply_markup: hexagonMenuKeyboard() }
       );
       return;
@@ -518,7 +531,7 @@ export function registerHexagonHandlers(bot: MyBot): void {
   bot.command("clearai", async (ctx) => {
     if (!ctx.from || !isOwner(ctx.from.id)) return;
     history.delete(ctx.from.id);
-    await ctx.reply("🧹 Hexagon memory cleared.");
+    await ctx.reply("🧹 Crescent memory cleared.");
   });
 
   bot.command("analyse", async (ctx) => {
@@ -533,7 +546,7 @@ export function registerHexagonCallbacks(bot: MyBot): void {
     await ctx.answerCallbackQuery();
     const { used, limit, remaining } = getQuotaStatus(ctx.from.id);
     await ctx.editMessageText(
-      `🤖 *HEXAGON AI AGENT*\n━━━━━━━━━━━━━━━━━━\n\n_Elite AI · Shop-aware · Group analyst · Task agent_\n\n📊 Today: *${used}/${limit}* queries used · *${remaining}* remaining\n\nAsk me anything or use the menu:`,
+      `🤖 *CRESCENT AI AGENT*\n━━━━━━━━━━━━━━━━━━\n\n_Elite AI · Shop-aware · Group analyst · Task agent_\n\n📊 Today: *${used}/${limit}* queries used · *${remaining}* remaining\n\nAsk me anything or use the menu:`,
       { parse_mode: "Markdown", reply_markup: hexagonMenuKeyboard() }
     );
   });
@@ -542,7 +555,7 @@ export function registerHexagonCallbacks(bot: MyBot): void {
     if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
     ctx.session.pendingAction = "hexagon:input";
     await ctx.answerCallbackQuery();
-    await ctx.reply("💬 *Chat with Hexagon*\n\nType your message:", { parse_mode: "Markdown" });
+    await ctx.reply("💬 *Chat with Crescent*\n\nType your message:", { parse_mode: "Markdown" });
   });
 
   bot.callbackQuery("hexagon:shop", async (ctx) => {
@@ -574,7 +587,7 @@ export function registerHexagonCallbacks(bot: MyBot): void {
     const { used, limit, remaining } = getQuotaStatus(ctx.from.id);
     const bar = "█".repeat(Math.round((used / limit) * 10)) + "░".repeat(10 - Math.round((used / limit) * 10));
     await ctx.editMessageText(
-      `📊 *HEXAGON USAGE*\n━━━━━━━━━━━━━━━━━━\n\n${bar}\n*${used}/${limit}* queries today\n*${remaining}* remaining\n\n_Resets midnight Nairobi time_\n_Free models: ${FREE_MODELS.length} in fallback pool_`,
+      `📊 *CRESCENT USAGE*\n━━━━━━━━━━━━━━━━━━\n\n${bar}\n*${used}/${limit}* queries today\n*${remaining}* remaining\n\n_Resets midnight Nairobi time_\n_Free models: ${FREE_MODELS.length} in fallback pool_`,
       { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🔙 Back", "menu:hexagon") }
     );
   });
@@ -584,7 +597,7 @@ export function registerHexagonCallbacks(bot: MyBot): void {
     history.delete(ctx.from.id);
     await ctx.answerCallbackQuery("🧹 Cleared");
     await ctx.editMessageText(
-      `🤖 *HEXAGON*\n━━━━━━━━━━━━━━━━━━\n\n🧹 Memory cleared. Fresh start!`,
+      `🤖 *CRESCENT*\n━━━━━━━━━━━━━━━━━━\n\n🧹 Memory cleared. Fresh start!`,
       { parse_mode: "Markdown", reply_markup: hexagonMenuKeyboard() }
     );
   });
@@ -629,7 +642,7 @@ export async function sendDailyDigest(userId: number, bot: MyBot): Promise<void>
     if (lowStock.length > 0) digest += `• ⚠️ Low stock: ${lowStock.map((p) => p.name).join(", ")}\n`;
 
     const { used, limit } = getQuotaStatus(userId);
-    digest += `\n🤖 *HEXAGON AI*\n• Queries today: ${used}/${limit}\n`;
+    digest += `\n🤖 *CRESCENT AI*\n• Queries today: ${used}/${limit}\n`;
     digest += `\n_Have a productive day! /hexagon to chat._`;
 
     await bot.api.sendMessage(userId, digest, { parse_mode: "Markdown" });
