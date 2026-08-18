@@ -29,7 +29,7 @@ import {
 } from "@workspace/db";
 import type { MyBot } from "../index";
 import type { BotContext } from "../context";
-import { isOwner } from "../helpers";
+import { isOwner, mustBeGroup } from "../helpers";
 import { checkAccess } from "./access";
 import { logger } from "../../lib/logger";
 import { createCryptoBotInvoice, type CryptoBotAsset } from "./cryptobot";
@@ -557,6 +557,8 @@ export async function logGroupMessage(ctx: BotContext): Promise<void> {
 // ── Group analyst ─────────────────────────────────────────────────────────────
 
 async function runGroupAnalysis(ctx: BotContext, bot: MyBot): Promise<void> {
+  if (!(await mustBeGroup(ctx))) return;
+
   const chatId = ctx.chat!.id;
   const thinking = await ctx.reply("🔍 _Analysing group activity..._", { parse_mode: "Markdown" });
 
@@ -575,7 +577,7 @@ async function runGroupAnalysis(ctx: BotContext, bot: MyBot): Promise<void> {
 
     if (messages.length < 5) {
       await ctx.api.deleteMessage(chatId, thinking.message_id).catch(() => {});
-      await ctx.reply("📊 Not enough group messages recorded yet.\n\n_I need at least 5 messages from the group to analyse. I log messages automatically once added to a group._", { parse_mode: "Markdown" });
+      await ctx.reply("📊 Not enough live group messages recorded yet.\n\n_I need at least 5 messages from this group. Make sure the bot is an admin and that Telegram privacy mode is disabled in BotFather so it can receive normal group conversations._", { parse_mode: "Markdown" });
       return;
     }
 

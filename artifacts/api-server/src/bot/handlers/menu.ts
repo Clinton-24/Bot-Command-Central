@@ -203,7 +203,7 @@ export function registerMenuHandlers(bot: MyBot): void {
       `/crescent · /ai [question]\n` +
       (isOwnerUser
         ? `/email [brief] · /remind <time> <msg>\n` +
-          `/reminders · /digest · /battery\n`
+          `/reminders · /digest · /battery · /analyse\n`
         : "") +
       `/clearai\n\n` +
       `👥 *Group Admin*\n` +
