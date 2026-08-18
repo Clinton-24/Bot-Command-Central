@@ -252,6 +252,21 @@ async function executeAction(bot: MyBot, ownerId: number, action: AgentAction): 
 // ── Conversation history ──────────────────────────────────────────────────────
 
 const history = new Map<number, Array<{ role: "user" | "assistant"; content: string }>>();
+const activeHexagonUsers = new Set<number>();
+const seenHexagonUpdates = new Set<number>();
+const MAX_SEEN_HEXAGON_UPDATES = 1000;
+
+function wasAlreadyHandled(updateId: number): boolean {
+  if (seenHexagonUpdates.has(updateId)) return true;
+
+  seenHexagonUpdates.add(updateId);
+  if (seenHexagonUpdates.size > MAX_SEEN_HEXAGON_UPDATES) {
+    const oldestUpdateId = seenHexagonUpdates.values().next().value;
+    if (typeof oldestUpdateId === "number") seenHexagonUpdates.delete(oldestUpdateId);
+  }
+
+  return false;
+}
 
 function getHistory(id: number) {
   if (!history.has(id)) history.set(id, []);
@@ -322,44 +337,55 @@ function hexagonMenuKeyboard(): InlineKeyboard {
 
 export async function handleHexagonMessage(ctx: BotContext, input: string): Promise<void> {
   const userId = ctx.from!.id;
-  const quota = checkAndIncrementQuota(userId);
+  if (wasAlreadyHandled(ctx.update.update_id)) return;
 
-  if (!quota.allowed) {
-    await ctx.reply(
-      `⛔ *Daily limit reached*\n━━━━━━━━━━━━━━━━━━\n\nYou've used ${quota.used}/${quota.limit} queries today.\n\n_Resets at midnight Nairobi time._`,
-      { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🤖 Hexagon", "menu:hexagon") }
-    );
+  if (activeHexagonUsers.has(userId)) {
+    await ctx.reply("⏳ Hexagon is still processing your previous request. Please wait for the response.");
     return;
   }
 
-  const thinking = await ctx.reply(`🧠 _Hexagon thinking... (${quota.used}/${quota.limit})_`, { parse_mode: "Markdown" });
+  activeHexagonUsers.add(userId);
 
   try {
-    const { reply, model, actionResult } = await askHexagon(userId, input, ctx);
-    await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
+    const quota = checkAndIncrementQuota(userId);
 
-    const chunks = split(reply);
-    for (let i = 0; i < chunks.length; i++) {
-      const isLast = i === chunks.length - 1;
+    if (!quota.allowed) {
       await ctx.reply(
-        (i === 0 ? `🤖 *HEXAGON*\n━━━━━━━━━━━━━━━━━━\n\n` : "") + chunks[i],
-        {
-          parse_mode: "Markdown",
-          reply_markup: isLast
-            ? new InlineKeyboard().text("💬 Continue", "hexagon:chat").text("🤖 Menu", "menu:hexagon")
-            : undefined,
-        }
+        `⛔ *Daily limit reached*\n━━━━━━━━━━━━━━━━━━\n\nYou've used ${quota.used}/${quota.limit} queries today.\n\n_Resets at midnight Nairobi time._`,
+        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🤖 Hexagon", "menu:hexagon") }
       );
+      return;
     }
 
-    if (actionResult) {
-      await ctx.reply(`⚡ *Agent Result*\n━━━━━━━━━━━━━━━━━━\n\n${actionResult}`, { parse_mode: "Markdown" });
+    const thinking = await ctx.reply(`🧠 _Hexagon thinking... (${quota.used}/${quota.limit})_`, { parse_mode: "Markdown" });
+
+    try {
+      const { reply, actionResult } = await askHexagon(userId, input, ctx);
+      await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
+
+      const chunks = split(reply);
+      for (let i = 0; i < chunks.length; i++) {
+        const isLast = i === chunks.length - 1;
+        await ctx.reply(
+          (i === 0 ? `🤖 *HEXAGON*\n━━━━━━━━━━━━━━━━━━\n\n` : "") + chunks[i],
+          {
+            parse_mode: "Markdown",
+            reply_markup: isLast
+              ? new InlineKeyboard().text("💬 Continue", "hexagon:chat").text("🤖 Menu", "menu:hexagon")
+              : undefined,
+          }
+        );
+      }
+
+      if (actionResult) {
+        await ctx.reply(`⚡ *Agent Result*\n━━━━━━━━━━━━━━━━━━\n\n${actionResult}`, { parse_mode: "Markdown" });
+      }
+    } catch (err) {
+      await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
+      await ctx.reply(`❌ *Hexagon error*\n\n${err instanceof Error ? err.message : "Unknown error"}`, { parse_mode: "Markdown" });
     }
-
-
-  } catch (err) {
-    await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
-    await ctx.reply(`❌ *Hexagon error*\n\n${err instanceof Error ? err.message : "Unknown error"}`, { parse_mode: "Markdown" });
+  } finally {
+    activeHexagonUsers.delete(userId);
   }
 }
 
