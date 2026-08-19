@@ -30,7 +30,7 @@ import {
 import type { MyBot } from "../index";
 import type { BotContext } from "../context";
 import { isOwner, mustBeGroup } from "../helpers";
-import { checkAccess } from "./access";
+import { checkCrescentAccess } from "./access";
 import { logger } from "../../lib/logger";
 import { createCryptoBotInvoice, type CryptoBotAsset } from "./cryptobot";
 import {
@@ -347,6 +347,8 @@ function extractAction(reply: string): { clean: string; action: AgentAction | nu
 }
 
 async function executeAction(bot: MyBot, ownerId: number, action: AgentAction): Promise<string> {
+  if (!isOwner(ownerId)) return "⚠️ Agent actions are available to the bot owner only.";
+
   try {
     switch (action.type) {
       case "broadcast": {
@@ -481,7 +483,7 @@ function quotaTopupKeyboard(): InlineKeyboard {
 export async function handleHexagonMessage(ctx: BotContext, input: string): Promise<void> {
   const userId = ctx.from!.id;
   if (wasAlreadyHandled(ctx.update.update_id)) return;
-  if (!(await checkAccess(ctx, "free"))) return;
+  if (!(await checkCrescentAccess(ctx))) return;
 
   if (activeHexagonUsers.has(userId)) {
     await ctx.reply("⏳ Crescent is still processing your previous request. Please wait for the response.");
@@ -655,7 +657,7 @@ export async function sendDailyGroupDigest(bot: MyBot, chatId: number, ownerId: 
 
 export function registerHexagonHandlers(bot: MyBot): void {
   bot.command("crescent", async (ctx) => {
-    if (!ctx.from || !(await checkAccess(ctx, "free"))) return;
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) return;
     const input = ctx.match?.trim();
     if (!input) {
       const quota = await getCrescentQuotaStatus(ctx.from.id);
@@ -670,14 +672,14 @@ export function registerHexagonHandlers(bot: MyBot): void {
   });
 
   bot.command("ai", async (ctx) => {
-    if (!ctx.from || !(await checkAccess(ctx, "free"))) return;
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) return;
     const input = ctx.match?.trim();
     if (!input) { await ctx.reply("Usage: /ai [question]"); return; }
     await handleHexagonMessage(ctx, input);
   });
 
   bot.command("clearai", async (ctx) => {
-    if (!ctx.from || !(await checkAccess(ctx, "free"))) return;
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) return;
     history.delete(ctx.from.id);
     await ctx.reply("🧹 Crescent memory cleared.");
   });
@@ -690,7 +692,7 @@ export function registerHexagonHandlers(bot: MyBot): void {
 
 export function registerHexagonCallbacks(bot: MyBot): void {
   bot.callbackQuery("menu:hexagon", async (ctx) => {
-    if (!ctx.from || !(await checkAccess(ctx, "free"))) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery("⛔"); return; }
     await ctx.answerCallbackQuery();
     const quota = await getCrescentQuotaStatus(ctx.from.id);
     const quotaText = quota.unlimited ? "Unlimited" : formatCrescentQuota(quota);
@@ -701,7 +703,7 @@ export function registerHexagonCallbacks(bot: MyBot): void {
   });
 
   bot.callbackQuery("crescent:topup", async (ctx) => {
-    if (!ctx.from || !(await checkAccess(ctx, "free"))) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery("⛔"); return; }
     if (!process.env.CRYPTOBOT_API_TOKEN) {
       await ctx.answerCallbackQuery("Payments are not configured.");
       await ctx.reply("⚠️ Crypto payments are not configured yet. Please contact the owner.");
@@ -744,14 +746,14 @@ export function registerHexagonCallbacks(bot: MyBot): void {
   });
 
   bot.callbackQuery("hexagon:chat", async (ctx) => {
-    if (!ctx.from || !(await checkAccess(ctx, "free"))) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery("⛔"); return; }
     ctx.session.pendingAction = "hexagon:input";
     await ctx.answerCallbackQuery();
     await ctx.reply("💬 *Chat with Crescent*\n\nType your message:", { parse_mode: "Markdown" });
   });
 
   bot.callbackQuery("hexagon:shop", async (ctx) => {
-    if (!ctx.from || !(await checkAccess(ctx, "free"))) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery("⛔"); return; }
     ctx.session.pendingAction = "hexagon:input";
     await ctx.answerCallbackQuery();
     await ctx.reply("🛍️ *Shop Q&A*\n\nAsk about products, orders, pricing, or stock:\n\n_e.g. \"Which products are low on stock?\" or \"Summarise today's orders\"_", { parse_mode: "Markdown" });
@@ -774,7 +776,7 @@ export function registerHexagonCallbacks(bot: MyBot): void {
   });
 
   bot.callbackQuery("hexagon:usage", async (ctx) => {
-    if (!ctx.from || !(await checkAccess(ctx, "free"))) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery("⛔"); return; }
     await ctx.answerCallbackQuery();
     const quota = await getCrescentQuotaStatus(ctx.from.id);
     const quotaText = quota.unlimited ? "Unlimited" : formatCrescentQuota(quota);
@@ -786,7 +788,7 @@ export function registerHexagonCallbacks(bot: MyBot): void {
   });
 
   bot.callbackQuery("hexagon:clear", async (ctx) => {
-    if (!ctx.from || !(await checkAccess(ctx, "free"))) { await ctx.answerCallbackQuery(); return; }
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery(); return; }
     history.delete(ctx.from.id);
     await ctx.answerCallbackQuery("🧹 Cleared");
     await ctx.editMessageText(
