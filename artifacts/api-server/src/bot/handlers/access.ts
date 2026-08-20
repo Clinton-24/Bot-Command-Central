@@ -95,6 +95,42 @@ export async function checkAccess(
   }
 }
 
+export async function checkCrescentAccess(ctx: BotContext): Promise<boolean> {
+  const userId = ctx.from?.id;
+  if (!userId) return false;
+  if (isOwner(userId)) return true;
+
+  try {
+    const [record] = await db.select().from(accessTable).where(eq(accessTable.userId, userId));
+
+    if (record?.tier === "blocked") {
+      await ctx.reply(
+        `🚫 *Access Denied*\n━━━━━━━━━━━━━━━━━━\n\nYour account has been blocked.${record.blockedReason ? `\n_Reason: ${record.blockedReason}_` : ""}`,
+        { parse_mode: "Markdown" },
+      );
+      return false;
+    }
+
+    if (record?.expiresAt && record.expiresAt < new Date()) {
+      await db.update(accessTable).set({ isApproved: false, isPending: false }).where(eq(accessTable.userId, userId));
+      await ctx.reply("⏰ *Crescent access expired.*\n\nPlease contact the owner to renew access.", { parse_mode: "Markdown" });
+      return false;
+    }
+
+    if (record) {
+      await db.update(accessTable)
+        .set({ lastSeenAt: new Date(), totalMessages: (record.totalMessages ?? 0) + 1 })
+        .where(eq(accessTable.userId, userId))
+        .catch(() => {});
+    }
+
+    return true;
+  } catch (err) {
+    logger.error({ err }, "checkCrescentAccess error");
+    return false;
+  }
+}
+
 // ── Get user access record ────────────────────────────────────────────────────
 
 export async function getAccess(userId: number) {

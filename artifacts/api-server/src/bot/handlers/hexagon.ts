@@ -9,12 +9,28 @@
  */
 
 import { InlineKeyboard } from "grammy";
-import { eq, desc, gte, and, sql } from "drizzle-orm";
-import { db, productsTable, ordersTable, usersTable, groupMessagesTable, groupSettingsTable, warningsTable } from "@workspace/db";
+import { Pool } from "pg";
+import { eq, desc, gte, and, count } from "drizzle-orm";
+import {
+  accessTable,
+  blacklistTable,
+  crescentQuotaCreditsTable,
+  crescentQuotaPurchasesTable,
+  db,
+  dbLogsTable,
+  externalDbLogsTable,
+  groupMessagesTable,
+  groupSettingsTable,
+  meetingsTable,
+  ordersTable,
+  productsTable,
+  usersTable,
+  warningsTable,
+} from "@workspace/db";
 import type { MyBot } from "../index";
 import type { BotContext } from "../context";
-import { isOwner } from "../helpers";
-import { checkAccess } from "./access";
+import { isOwner, mustBeGroup } from "../helpers";
+import { checkCrescentAccess } from "./access";
 import { logger } from "../../lib/logger";
 import { createCryptoBotInvoice, type CryptoBotAsset } from "./cryptobot";
 import {
@@ -105,6 +121,126 @@ async function buildGroupContext(chatId: number): Promise<string> {
     return `LAST 24H GROUP ACTIVITY (${messages.length} messages, ${byUser.size} users):\n${lines}`;
   } catch {
     return "Group data unavailable.";
+  }
+}
+
+async function buildHarmonyContext(): Promise<string> {
+  const externalDbUrl = process.env.EXTERNAL_DB_URL;
+  if (!externalDbUrl) return "HARMONY DB: not configured.";
+
+  const pool = new Pool({
+    connectionString: externalDbUrl,
+    ssl: { rejectUnauthorized: false },
+    connectionTimeoutMillis: 5000,
+    max: 1,
+  });
+
+  try {
+    const [tablesResult, columnsResult] = await Promise.all([
+      pool.query<{ table_name: string; estimated_rows: string | number }>(`
+        SELECT c.relname AS table_name,
+               COALESCE(s.n_live_tup, 0)::bigint AS estimated_rows
+        FROM pg_class c
+        JOIN pg_namespace n ON n.oid = c.relnamespace
+        LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
+        WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
+        ORDER BY c.relname
+      `),
+      pool.query<{ table_name: string; column_name: string; data_type: string }>(`
+        SELECT table_name, column_name, data_type
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+        ORDER BY table_name, ordinal_position
+      `),
+    ]);
+
+    const columnsByTable = new Map<string, string[]>();
+    for (const column of columnsResult.rows) {
+      const columns = columnsByTable.get(column.table_name) ?? [];
+      columns.push(`${column.column_name}:${column.data_type}`);
+      columnsByTable.set(column.table_name, columns);
+    }
+
+    const tableLines = tablesResult.rows.map((table) => {
+      const columns = columnsByTable.get(table.table_name)?.join(", ") ?? "no columns reported";
+      return `• ${table.table_name} (~${Number(table.estimated_rows)} rows) — ${columns}`;
+    });
+
+    return [
+      "HARMONY DB SCHEMA (read-only metadata; no credentials or row values included):",
+      tableLines.length > 0 ? tableLines.join("\n") : "No public tables found.",
+    ].join("\n");
+  } catch (err) {
+    logger.warn({ err }, "Crescent could not inspect Harmony DB metadata");
+    return "HARMONY DB: configured but schema metadata is unavailable.";
+  } finally {
+    await pool.end().catch(() => {});
+  }
+}
+
+async function buildBotContext(): Promise<string> {
+  try {
+    const [
+      users,
+      access,
+      products,
+      orders,
+      groups,
+      groupSettings,
+      warnings,
+      blacklist,
+      meetings,
+      botLogs,
+      harmonyLogs,
+      quotaPurchases,
+      quotaCredits,
+    ] = await Promise.all([
+      db.select({ total: count() }).from(usersTable),
+      db.select({ total: count() }).from(accessTable),
+      db.select({ total: count() }).from(productsTable),
+      db.select({ total: count() }).from(ordersTable),
+      db.select({ total: count() }).from(groupMessagesTable),
+      db.select({ total: count() }).from(groupSettingsTable),
+      db.select({ total: count() }).from(warningsTable),
+      db.select({ total: count() }).from(blacklistTable),
+      db.select({ total: count() }).from(meetingsTable),
+      db.select({ status: dbLogsTable.status, message: dbLogsTable.message }).from(dbLogsTable).orderBy(desc(dbLogsTable.createdAt)).limit(8),
+      db.select({ status: externalDbLogsTable.status, checkType: externalDbLogsTable.checkType, message: externalDbLogsTable.message }).from(externalDbLogsTable).orderBy(desc(externalDbLogsTable.createdAt)).limit(8),
+      db.select({ total: count() }).from(crescentQuotaPurchasesTable),
+      db.select({ total: count() }).from(crescentQuotaCreditsTable),
+    ]);
+
+    const total = (rows: Array<{ total: number }>): number => rows[0]?.total ?? 0;
+    const botLogsText = botLogs.length === 0
+      ? "No recent bot DB logs."
+      : botLogs.map((log) => `• ${log.status}: ${log.message}`).join("\n");
+    const harmonyLogsText = harmonyLogs.length === 0
+      ? "No recent Harmony health logs."
+      : harmonyLogs.map((log) => `• ${log.status} ${log.checkType}: ${log.message}`).join("\n");
+    const harmonyContext = await buildHarmonyContext();
+
+    return [
+      "BOT DATA SNAPSHOT (read-only aggregate data):",
+      `• Registered users: ${total(users)}`,
+      `• Access records: ${total(access)}`,
+      `• Products: ${total(products)}`,
+      `• Orders: ${total(orders)}`,
+      `• Recorded group messages: ${total(groups)}`,
+      `• Configured groups: ${total(groupSettings)}`,
+      `• Warnings: ${total(warnings)}`,
+      `• Blacklisted terms: ${total(blacklist)}`,
+      `• Meetings: ${total(meetings)}`,
+      `• Quota purchases: ${total(quotaPurchases)}`,
+      `• Quota accounts: ${total(quotaCredits)}`,
+      "RECENT BOT DB LOGS:",
+      botLogsText,
+      "RECENT HARMONY HEALTH LOGS:",
+      harmonyLogsText,
+      harmonyContext,
+    ].join("\n");
+  } catch (err) {
+    logger.warn({ err }, "Crescent could not build bot context");
+    return `BOT DATA SNAPSHOT: unavailable.\n${await buildHarmonyContext()}`;
   }
 }
 
@@ -211,6 +347,8 @@ function extractAction(reply: string): { clean: string; action: AgentAction | nu
 }
 
 async function executeAction(bot: MyBot, ownerId: number, action: AgentAction): Promise<string> {
+  if (!isOwner(ownerId)) return "⚠️ Agent actions are available to the bot owner only.";
+
   try {
     switch (action.type) {
       case "broadcast": {
@@ -345,7 +483,7 @@ function quotaTopupKeyboard(): InlineKeyboard {
 export async function handleHexagonMessage(ctx: BotContext, input: string): Promise<void> {
   const userId = ctx.from!.id;
   if (wasAlreadyHandled(ctx.update.update_id)) return;
-  if (!(await checkAccess(ctx, "free"))) return;
+  if (!(await checkCrescentAccess(ctx))) return;
 
   if (activeHexagonUsers.has(userId)) {
     await ctx.reply("⏳ Crescent is still processing your previous request. Please wait for the response.");
@@ -401,14 +539,19 @@ export async function handleHexagonMessage(ctx: BotContext, input: string): Prom
 // ── Group message logger (call from bot message handler) ──────────────────────
 
 export async function logGroupMessage(ctx: BotContext): Promise<void> {
-  if (!ctx.message?.text || !ctx.from || ctx.chat?.type === "private") return;
+  const message = ctx.message;
+  if (!message || !ctx.from || ctx.chat?.type === "private") return;
+
+  const text = "text" in message ? message.text : "caption" in message ? message.caption : undefined;
+  if (!text?.trim()) return;
+
   try {
     await db.insert(groupMessagesTable).values({
       chatId: ctx.chat!.id,
       userId: ctx.from.id,
       username: ctx.from.username ?? null,
       firstName: ctx.from.first_name ?? null,
-      message: ctx.message.text.slice(0, 500),
+      message: text.trim().slice(0, 500),
     });
   } catch { /* non-critical */ }
 }
@@ -416,25 +559,30 @@ export async function logGroupMessage(ctx: BotContext): Promise<void> {
 // ── Group analyst ─────────────────────────────────────────────────────────────
 
 async function runGroupAnalysis(ctx: BotContext, bot: MyBot): Promise<void> {
+  if (!(await mustBeGroup(ctx))) return;
+
   const chatId = ctx.chat!.id;
   const thinking = await ctx.reply("🔍 _Analysing group activity..._", { parse_mode: "Markdown" });
 
   try {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const messages = await db
-      .select()
-      .from(groupMessagesTable)
-      .where(and(eq(groupMessagesTable.chatId, chatId), gte(groupMessagesTable.createdAt, since)))
-      .orderBy(groupMessagesTable.createdAt)
-      .limit(300);
+    const [latestMessages, botContext] = await Promise.all([
+      db
+        .select()
+        .from(groupMessagesTable)
+        .where(and(eq(groupMessagesTable.chatId, chatId), gte(groupMessagesTable.createdAt, since)))
+        .orderBy(desc(groupMessagesTable.createdAt))
+        .limit(300),
+      buildBotContext(),
+    ]);
+    const messages = latestMessages.reverse();
 
     if (messages.length < 5) {
       await ctx.api.deleteMessage(chatId, thinking.message_id).catch(() => {});
-      await ctx.reply("📊 Not enough group messages recorded yet.\n\n_I need at least 5 messages from the group to analyse. I log messages automatically once added to a group._", { parse_mode: "Markdown" });
+      await ctx.reply("📊 Not enough live group messages recorded yet.\n\n_I need at least 5 messages from this group. Make sure the bot is an admin and that Telegram privacy mode is disabled in BotFather so it can receive normal group conversations._", { parse_mode: "Markdown" });
       return;
     }
 
-    // Build analysis prompt
     const transcript = messages
       .map((m) => `[${m.firstName ?? m.username ?? m.userId}]: ${m.message}`)
       .join("\n");
@@ -442,25 +590,30 @@ async function runGroupAnalysis(ctx: BotContext, bot: MyBot): Promise<void> {
     const { reply } = await callOpenRouter([
       {
         role: "system",
-        content: `You are CRESCENT, an expert group behaviour analyst. Analyse the following Telegram group conversation from the last 24 hours. Provide:
-1. ACTIVITY SUMMARY — total messages, active users, peak times
+        content: `You are CRESCENT, an expert group behaviour analyst and Bot-Command-Central operations analyst. Analyse the Telegram group and the bot snapshot provided below. Provide:
+1. GROUP ACTIVITY — total messages, active users, peak times, and conversation themes
 2. USER PROFILES — brief behaviour profile for each active user (tone, topics, activity level)
 3. SENTIMENT — overall group mood
-4. RED FLAGS — any suspicious, spammy, or toxic patterns
-5. RECOMMENDATIONS — what the admin should do
+4. RED FLAGS — suspicious, spammy, or toxic patterns, clearly separating evidence from uncertainty
+5. BOT OVERVIEW — explain what the bot's data and connected Harmony DB indicate about usage, health, and configuration
+6. RECOMMENDATIONS — concrete actions for the admin
 
-Be concise, sharp, and insightful. Use bullet points. Today: ${new Date().toDateString()}`
+Use only the supplied data. Do not invent records, credentials, or database contents. Treat database metadata and logs as read-only context. Be concise, sharp, and insightful. Today: ${new Date().toDateString()}
+
+${botContext}`
       },
-      { role: "user", content: `Analyse this conversation:\n\n${transcript.slice(0, 8000)}` }
+      { role: "user", content: `Analyse this conversation from the last 24 hours:\n\n${transcript.slice(0, 8000)}` }
     ]);
 
     await ctx.api.deleteMessage(chatId, thinking.message_id).catch(() => {});
 
-    const chunks = split(`📊 *GROUP ANALYSIS REPORT*\n━━━━━━━━━━━━━━━━━━\n_Last 24 hours · ${messages.length} messages · ${new Set(messages.map((m) => m.userId)).size} users_\n\n${reply}`);
+    const header = `📊 GROUP + BOT ANALYSIS REPORT\n━━━━━━━━━━━━━━━━━━\nLatest live window · ${messages.length} messages · ${new Set(messages.map((m) => m.userId)).size} users`;
+    const chunks = split(`${header}\n\n${reply}`);
     for (const chunk of chunks) {
-      await ctx.reply(chunk, { parse_mode: "Markdown" });
+      await ctx.reply(chunk);
     }
   } catch (err) {
+    logger.error({ err, chatId }, "Group analysis failed");
     await ctx.api.deleteMessage(chatId, thinking.message_id).catch(() => {});
     await ctx.reply(`❌ Analysis failed: ${err instanceof Error ? err.message : "Unknown"}`);
   }
@@ -503,8 +656,8 @@ export async function sendDailyGroupDigest(bot: MyBot, chatId: number, ownerId: 
 // ── Register ──────────────────────────────────────────────────────────────────
 
 export function registerHexagonHandlers(bot: MyBot): void {
-  bot.command("hexagon", async (ctx) => {
-    if (!ctx.from || !(await checkAccess(ctx, "free"))) return;
+  bot.command("crescent", async (ctx) => {
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) return;
     const input = ctx.match?.trim();
     if (!input) {
       const quota = await getCrescentQuotaStatus(ctx.from.id);
@@ -519,14 +672,14 @@ export function registerHexagonHandlers(bot: MyBot): void {
   });
 
   bot.command("ai", async (ctx) => {
-    if (!ctx.from || !(await checkAccess(ctx, "free"))) return;
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) return;
     const input = ctx.match?.trim();
     if (!input) { await ctx.reply("Usage: /ai [question]"); return; }
     await handleHexagonMessage(ctx, input);
   });
 
   bot.command("clearai", async (ctx) => {
-    if (!ctx.from || !(await checkAccess(ctx, "free"))) return;
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) return;
     history.delete(ctx.from.id);
     await ctx.reply("🧹 Crescent memory cleared.");
   });
@@ -539,7 +692,7 @@ export function registerHexagonHandlers(bot: MyBot): void {
 
 export function registerHexagonCallbacks(bot: MyBot): void {
   bot.callbackQuery("menu:hexagon", async (ctx) => {
-    if (!ctx.from || !(await checkAccess(ctx, "free"))) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery("⛔"); return; }
     await ctx.answerCallbackQuery();
     const quota = await getCrescentQuotaStatus(ctx.from.id);
     const quotaText = quota.unlimited ? "Unlimited" : formatCrescentQuota(quota);
@@ -550,7 +703,7 @@ export function registerHexagonCallbacks(bot: MyBot): void {
   });
 
   bot.callbackQuery("crescent:topup", async (ctx) => {
-    if (!ctx.from || !(await checkAccess(ctx, "free"))) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery("⛔"); return; }
     if (!process.env.CRYPTOBOT_API_TOKEN) {
       await ctx.answerCallbackQuery("Payments are not configured.");
       await ctx.reply("⚠️ Crypto payments are not configured yet. Please contact the owner.");
@@ -593,14 +746,14 @@ export function registerHexagonCallbacks(bot: MyBot): void {
   });
 
   bot.callbackQuery("hexagon:chat", async (ctx) => {
-    if (!ctx.from || !(await checkAccess(ctx, "free"))) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery("⛔"); return; }
     ctx.session.pendingAction = "hexagon:input";
     await ctx.answerCallbackQuery();
     await ctx.reply("💬 *Chat with Crescent*\n\nType your message:", { parse_mode: "Markdown" });
   });
 
   bot.callbackQuery("hexagon:shop", async (ctx) => {
-    if (!ctx.from || !(await checkAccess(ctx, "free"))) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery("⛔"); return; }
     ctx.session.pendingAction = "hexagon:input";
     await ctx.answerCallbackQuery();
     await ctx.reply("🛍️ *Shop Q&A*\n\nAsk about products, orders, pricing, or stock:\n\n_e.g. \"Which products are low on stock?\" or \"Summarise today's orders\"_", { parse_mode: "Markdown" });
@@ -623,7 +776,7 @@ export function registerHexagonCallbacks(bot: MyBot): void {
   });
 
   bot.callbackQuery("hexagon:usage", async (ctx) => {
-    if (!ctx.from || !(await checkAccess(ctx, "free"))) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery("⛔"); return; }
     await ctx.answerCallbackQuery();
     const quota = await getCrescentQuotaStatus(ctx.from.id);
     const quotaText = quota.unlimited ? "Unlimited" : formatCrescentQuota(quota);
@@ -635,7 +788,7 @@ export function registerHexagonCallbacks(bot: MyBot): void {
   });
 
   bot.callbackQuery("hexagon:clear", async (ctx) => {
-    if (!ctx.from || !(await checkAccess(ctx, "free"))) { await ctx.answerCallbackQuery(); return; }
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery(); return; }
     history.delete(ctx.from.id);
     await ctx.answerCallbackQuery("🧹 Cleared");
     await ctx.editMessageText(
@@ -685,7 +838,7 @@ export async function sendDailyDigest(userId: number, bot: MyBot): Promise<void>
 
     const quota = await getCrescentQuotaStatus(userId);
     digest += `\n🤖 *CRESCENT AI*\n• Quota: ${quota.unlimited ? "Unlimited" : formatCrescentQuota(quota)}\n`;
-    digest += `\n_Have a productive day! /hexagon to chat._`;
+    digest += `\n_Have a productive day! /crescent to chat._`;
 
     await bot.api.sendMessage(userId, digest, { parse_mode: "Markdown" });
   } catch (err) {
