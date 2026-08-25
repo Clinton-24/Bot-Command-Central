@@ -30,17 +30,16 @@ import {
 
 // ── OpenRouter ────────────────────────────────────────────────────────────────
 
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
-const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
+const AGENTROUTER_API_KEY = process.env.AGENTROUTER_API_KEY ?? "";
+const AGENTROUTER_BASE = "https://agentrouter.org/v1";
 
-// Priority fallback list — verified live August 2026
+// AgentRouter model fallback list — $200 free credits, 30+ providers
 const FREE_MODELS = [
-  "nvidia/nemotron-3-ultra-550b-a55b:free", // NVIDIA Nemotron Ultra — 1M ctx, top quality
-  "google/gemma-4-31b-it:free",             // Google Gemma 4 31B — fast, reliable
-  "google/gemma-4-26b-a4b-it:free",         // Google Gemma 4 26B — lightweight backup
-  "google/gemma-3-27b-it:free",             // Google Gemma 3 27B — stable fallback
-  "mistralai/mistral-small-3.2-24b-instruct:free", // Mistral Small — good chat
-  "cohere/command-r-plus:free",             // Cohere Command R+ — last resort
+  "claude-sonnet-4-5-20250929",  // Claude Sonnet 4.5 — best quality
+  "gpt-4o",                       // GPT-4o — strong general AI
+  "deepseek-chat",                // DeepSeek Chat — fast, capable
+  "gemini-2.0-flash",             // Gemini 2.0 Flash — quick responses
+  "gpt-4o-mini",                  // GPT-4o Mini — lightweight fallback
 ];
 
 // ── Quota ─────────────────────────────────────────────────────────────────────
@@ -148,15 +147,15 @@ FORMAT RULES:
 async function callOpenRouter(
   messages: Array<{ role: "user" | "assistant" | "system"; content: string }>
 ): Promise<{ reply: string; model: string }> {
-  if (!OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY not set on Render.");
+  if (!AGENTROUTER_API_KEY) throw new Error("AGENTROUTER_API_KEY not set on Render. Add it in Render → Environment.");
 
   let lastError = "";
   for (const model of FREE_MODELS) {
     try {
-      const res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
+      const res = await fetch(`${AGENTROUTER_BASE}/chat/completions`, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
+          "Authorization": `Bearer ${AGENTROUTER_API_KEY}`,
           "Content-Type": "application/json",
           "HTTP-Referer": "https://bot-command-central-1.onrender.com",
           "X-Title": "Crescent-AI",
