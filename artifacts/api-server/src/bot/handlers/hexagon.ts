@@ -33,13 +33,13 @@ import {
 const AGENTROUTER_API_KEY = process.env.AGENTROUTER_API_KEY ?? "";
 const AGENTROUTER_BASE = "https://agentrouter.org/v1";
 
-// AgentRouter model fallback list — $200 free credits, 30+ providers
+// AgentRouter confirmed supported models (from dashboard screenshot)
 const FREE_MODELS = [
-  "claude-sonnet-4-5-20250929",  // Claude Sonnet 4.5 — best quality
-  "gpt-4o",                       // GPT-4o — strong general AI
-  "deepseek-chat",                // DeepSeek Chat — fast, capable
-  "gemini-2.0-flash",             // Gemini 2.0 Flash — quick responses
-  "gpt-4o-mini",                  // GPT-4o Mini — lightweight fallback
+  "claude-sonnet-4-5-20250929",   // Claude Sonnet 4.5 — primary
+  "claude-haiku-4-5-20251001",    // Claude Haiku 4.5 — fast fallback
+  "claude-opus-4-6",              // Claude Opus 4.6 — heavy tasks
+  "deepseek-v3.2",                // DeepSeek V3.2 — backup
+  "glm-5.1",                      // GLM 5.1 — last resort
 ];
 
 // ── Quota ─────────────────────────────────────────────────────────────────────
