@@ -188,6 +188,10 @@ async function callOpenRouter(
       logger.warn({ model }, "Model fetch failed");
     }
   }
+  // Give a clear actionable error
+  if (lastError.includes("HTML") || lastError.includes("API key")) {
+    throw new Error(`AgentRouter auth failed — verify AGENTROUTER_API_KEY on Render is correct. Get key from: https://agentrouter.org/console/token`);
+  }
   throw new Error(`All models failed. Last: ${lastError}`);
 }
 
