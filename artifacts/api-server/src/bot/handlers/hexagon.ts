@@ -33,13 +33,14 @@ import {
 const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
 const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 
-// OpenRouter free models — verified working
+// OpenRouter free models — verified August 2026
+// openrouter/free auto-selects best available free model — most resilient option
 const FREE_MODELS = [
-  "google/gemini-2.0-flash-exp:free",
-  "meta-llama/llama-3.1-8b-instruct:free",
-  "qwen/qwen-2.5-72b-instruct:free",
-  "microsoft/phi-3-medium-128k-instruct:free",
-  "mistralai/mistral-7b-instruct:free",
+  "openrouter/free",                              // Auto-router — always works
+  "nvidia/nemotron-3-ultra-550b-a55b:free",       // 550B, 1M ctx — best quality
+  "nvidia/nemotron-3-nano-8b-v1:free",            // Fast, lightweight fallback
+  "google/gemma-3-27b-it:free",                   // Gemma 3 27B
+  "cohere/command-r-plus:free",                   // Cohere fallback
 ];
 
 // ── Quota ─────────────────────────────────────────────────────────────────────
