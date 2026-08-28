@@ -295,19 +295,29 @@ export function registerAccessHandlers(bot: MyBot): void {
 
   // ── Request access callback ────────────────────────────────────────────────
   bot.callbackQuery("access:request", async (ctx) => {
-    await ctx.answerCallbackQuery();
-    ctx.session.pendingAction = "access:message";
-    await ctx.reply(
-      `💬 *REQUEST ACCESS*\n━━━━━━━━━━━━━━━━━━\n\nSend a short message explaining why you want access:\n\n_e.g. "Referred by @username" or "I'm a regular customer"_`,
-      { parse_mode: "Markdown" }
-    );
+    try {
+      await ctx.answerCallbackQuery();
+      ctx.session.pendingAction = "access:message";
+      await ctx.reply(
+        `💬 *REQUEST ACCESS*\n━━━━━━━━━━━━━━━━━━\n\nSend a short message explaining why you want access:\n\n_e.g. "Referred by @username" or "I'm a regular customer"_`,
+        { parse_mode: "Markdown" }
+      );
+    } catch (err) {
+      logger.error({ err }, "access:request callback error");
+      await ctx.answerCallbackQuery("❌ Error occurred").catch(() => {});
+    }
   });
 
   // ── Invite code callback ───────────────────────────────────────────────────
   bot.callbackQuery("access:invite", async (ctx) => {
-    await ctx.answerCallbackQuery();
-    ctx.session.pendingAction = "access:code";
-    await ctx.reply(`🎟️ *INVITE CODE*\n\nSend your invite code:`, { parse_mode: "Markdown" });
+    try {
+      await ctx.answerCallbackQuery();
+      ctx.session.pendingAction = "access:code";
+      await ctx.reply(`🎟️ *INVITE CODE*\n\nSend your invite code:`, { parse_mode: "Markdown" });
+    } catch (err) {
+      logger.error({ err }, "access:invite callback error");
+      await ctx.answerCallbackQuery("❌ Error occurred").catch(() => {});
+    }
   });
 
   // ── Owner: approve callback ────────────────────────────────────────────────
@@ -486,6 +496,8 @@ export function registerAccessHandlers(bot: MyBot): void {
 export async function processAccessInput(bot: MyBot, ctx: BotContext, action: string, text: string): Promise<void> {
   const userId = ctx.from!.id;
   const name = ctx.from!.first_name ?? "User";
+
+  logger.info({ action, userId, textLength: text.length }, "processAccessInput called");
 
   if (action === "access:message") {
     try {
