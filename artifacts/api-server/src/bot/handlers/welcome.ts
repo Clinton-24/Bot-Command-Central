@@ -6,7 +6,7 @@ import { usersTable, groupSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { logger } from "../../lib/logger";
 import { isOwner } from "../helpers";
-import { handleInviteCode, getAccess } from "./access";
+import { handleInviteCode } from "./access";
 
 export function registerWelcomeHandler(bot: MyBot): void {
   bot.on("message:new_chat_members", async (ctx) => {
@@ -113,32 +113,6 @@ export function registerWelcomeHandler(bot: MyBot): void {
     const payload = ctx.match?.trim();
     if (payload && payload.length > 0 && !isOwner(from.id)) {
       await handleInviteCode(bot, ctx, payload);
-      return;
-    }
-
-    // Owner always gets full menu
-    if (isOwner(from.id)) { await sendMainMenu(ctx); return; }
-
-    // Check if user has access
-    const access = await getAccess(from.id);
-    if (!access || (!access.isApproved && !access.isPending)) {
-      const name = from.first_name ?? "User";
-      await ctx.reply(
-        `⚡ *BOT-COMMAND-CENTRAL*
-━━━━━━━━━━━━━━━━━━
-
-Welcome, *${name}*.
-
-🔐 This is a *private platform*. Access is by approval only.
-
-Submit a request or use an invite code to get started.`,
-        {
-          parse_mode: "Markdown",
-          reply_markup: new InlineKeyboard()
-            .text("🔑 Request Access", "access:request")
-            .text("🎟️ I Have a Code", "access:invite"),
-        }
-      );
       return;
     }
 
