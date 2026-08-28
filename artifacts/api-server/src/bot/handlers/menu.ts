@@ -35,6 +35,43 @@ export function mainMenuKeyboard(userId?: number): InlineKeyboard {
 }
 
 export async function sendMainMenu(ctx: BotContext): Promise<void> {
+  const userId = ctx.from?.id;
+
+  // Non-owners must have approved access
+  if (userId && !isOwner(userId)) {
+    const { getAccess } = await import("./access");
+    const access = await getAccess(userId).catch(() => null);
+
+    if (!access || (!access.isApproved && !access.isPending)) {
+      const name = ctx.from?.first_name ?? "User";
+      const gateText =
+        `⚡ *BOT-COMMAND-CENTRAL*\n━━━━━━━━━━━━━━━━━━\n\n` +
+        `Welcome, *${name}*.\n\n` +
+        `🔐 This is a *private platform*.\nAccess is by approval only.`;
+      const gateKb = new InlineKeyboard()
+        .text("🔑 Request Access", "access:request")
+        .text("🎟️ I Have a Code", "access:invite");
+      if (ctx.callbackQuery) {
+        await ctx.editMessageText(gateText, { parse_mode: "Markdown", reply_markup: gateKb });
+        await ctx.answerCallbackQuery();
+      } else {
+        await ctx.reply(gateText, { parse_mode: "Markdown", reply_markup: gateKb });
+      }
+      return;
+    }
+
+    if (!access.isApproved && access.isPending) {
+      const pendingText = `⏳ *Pending Approval*\n━━━━━━━━━━━━━━━━━━\n\nYour request is being reviewed.\n_You\'ll be notified once approved._`;
+      if (ctx.callbackQuery) {
+        await ctx.editMessageText(pendingText, { parse_mode: "Markdown" });
+        await ctx.answerCallbackQuery();
+      } else {
+        await ctx.reply(pendingText, { parse_mode: "Markdown" });
+      }
+      return;
+    }
+  }
+
   const text =
     `⚡ *BOT PANEL*\n` +
     `━━━━━━━━━━━━━━━━━━\n\n` +
