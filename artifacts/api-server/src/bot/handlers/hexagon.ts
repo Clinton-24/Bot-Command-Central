@@ -359,7 +359,14 @@ export async function handleHexagonMessage(ctx: BotContext, input: string): Prom
   activeHexagonUsers.add(userId);
 
   try {
-    const quota = await consumeCrescentQuota(userId);
+    let quota;
+    try {
+      quota = await consumeCrescentQuota(userId);
+    } catch (quotaErr) {
+      // DB table may not exist yet — allow the request with unlimited access
+      logger.warn({ quotaErr }, "Quota check failed — allowing request");
+      quota = { used: 0, limit: CRESCENT_DAILY_LIMIT, bonus: 0, allowed: true, unlimited: true };
+    }
 
     if (!quota.allowed) {
       await ctx.reply(
