@@ -157,7 +157,10 @@ async function sendRequestAccessMessage(ctx: BotContext): Promise<void> {
 
 async function notifyOwnerRequest(bot: MyBot, userId: number, name: string, username: string | undefined, message: string): Promise<void> {
   const ownerIdStr = process.env["BOT_OWNER_ID"];
-  if (!ownerIdStr) return;
+  if (!ownerIdStr) {
+    logger.warn("BOT_OWNER_ID not set — cannot notify owner of access request");
+    return;
+  }
   const ownerId = parseInt(ownerIdStr);
   try {
     await bot.api.sendMessage(
@@ -485,7 +488,6 @@ export async function processAccessInput(bot: MyBot, ctx: BotContext, action: st
   const name = ctx.from!.first_name ?? "User";
 
   if (action === "access:message") {
-    // User submitting access request
     try {
       await db.insert(accessTable).values({
         userId,
