@@ -499,7 +499,12 @@ export async function processAccessInput(bot: MyBot, ctx: BotContext, action: st
         requestMessage: text.slice(0, 300),
       }).onConflictDoUpdate({
         target: accessTable.userId,
-        set: { isPending: true, requestMessage: text.slice(0, 300), username: ctx.from!.username, firstName: name },
+        set: { 
+          isPending: true, 
+          requestMessage: text.slice(0, 300), 
+          username: ctx.from!.username, 
+          firstName: name 
+        },
       });
 
       await ctx.reply(
