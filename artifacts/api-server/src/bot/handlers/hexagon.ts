@@ -30,16 +30,16 @@ import {
 
 // ── OpenRouter ────────────────────────────────────────────────────────────────
 
-const AGENTROUTER_API_KEY = process.env.AGENTROUTER_API_KEY ?? "";
-const AGENTROUTER_BASE = "https://agentrouter.org/v1";
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY ?? "";
+const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 
-// AgentRouter confirmed supported models (from dashboard screenshot)
+// OpenRouter free models — verified working
 const FREE_MODELS = [
-  "claude-sonnet-4-5-20250929",   // Claude Sonnet 4.5 — primary
-  "claude-haiku-4-5-20251001",    // Claude Haiku 4.5 — fast fallback
-  "claude-opus-4-6",              // Claude Opus 4.6 — heavy tasks
-  "deepseek-v3.2",                // DeepSeek V3.2 — backup
-  "glm-5.1",                      // GLM 5.1 — last resort
+  "google/gemini-2.0-flash-exp:free",
+  "meta-llama/llama-3.1-8b-instruct:free",
+  "qwen/qwen-2.5-72b-instruct:free",
+  "microsoft/phi-3-medium-128k-instruct:free",
+  "mistralai/mistral-7b-instruct:free",
 ];
 
 // ── Quota ─────────────────────────────────────────────────────────────────────
@@ -147,15 +147,15 @@ FORMAT RULES:
 async function callOpenRouter(
   messages: Array<{ role: "user" | "assistant" | "system"; content: string }>
 ): Promise<{ reply: string; model: string }> {
-  if (!AGENTROUTER_API_KEY) throw new Error("AGENTROUTER_API_KEY not set on Render. Add it in Render → Environment.");
+  if (!OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY not set on Render.");
 
   let lastError = "";
   for (const model of FREE_MODELS) {
     try {
-      const res = await fetch(`${AGENTROUTER_BASE}/chat/completions`, {
+      const res = await fetch(`${OPENROUTER_BASE}/chat/completions`, {
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${AGENTROUTER_API_KEY}`,
+          "Authorization": `Bearer ${OPENROUTER_API_KEY}`,
           "Content-Type": "application/json",
           "HTTP-Referer": "https://bot-command-central-1.onrender.com",
           "X-Title": "Crescent-AI",
@@ -190,7 +190,7 @@ async function callOpenRouter(
   }
   // Give a clear actionable error
   if (lastError.includes("HTML") || lastError.includes("API key")) {
-    throw new Error(`AgentRouter auth failed — verify AGENTROUTER_API_KEY on Render is correct. Get key from: https://agentrouter.org/console/token`);
+    throw new Error(`AgentRouter auth failed — verify OPENROUTER_API_KEY on Render is correct. Get key from: https://agentrouter.org/console/token`);
   }
   throw new Error(`All models failed. Last: ${lastError}`);
 }
