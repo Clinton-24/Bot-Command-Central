@@ -68,6 +68,11 @@ export async function runMigrations(): Promise<void> {
         ADD COLUMN IF NOT EXISTS daily_used INTEGER NOT NULL DEFAULT 0;
     `);
 
+    await client.query(`
+      ALTER TABLE IF EXISTS access
+        ADD COLUMN IF NOT EXISTS invited_by BIGINT;
+    `);
+
     logger.info("Migrations complete ✅");
   } catch (err) {
     logger.error({ err }, "Migration failed ❌");

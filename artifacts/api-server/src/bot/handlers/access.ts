@@ -8,8 +8,8 @@
  */
 
 import { InlineKeyboard } from "grammy";
-import { eq, desc, and } from "drizzle-orm";
-import { db, accessTable, inviteCodesTable } from "@workspace/db";
+import { eq, desc, sql } from "drizzle-orm";
+import { db, accessTable, inviteCodesTable, usersTable } from "@workspace/db";
 import type { MyBot } from "../index";
 import type { BotContext } from "../context";
 import { isOwner } from "../helpers";
@@ -178,72 +178,164 @@ async function notifyOwnerRequest(bot: MyBot, userId: number, name: string, user
   }
 }
 
+function escapeMarkdown(value: string): string {
+  return value.replace(/([\\_*`\[])/g, "\\$1");
+}
+
+async function findRegisteredInviter(reference: string) {
+  const normalizedReference = reference.trim().replace(/^@/, "");
+
+  if (/^\d+$/.test(normalizedReference)) {
+    const [inviter] = await db.select().from(usersTable).where(eq(usersTable.id, Number(normalizedReference)));
+    return inviter ?? null;
+  }
+
+  const [inviter] = await db
+    .select()
+    .from(usersTable)
+    .where(sql`lower(${usersTable.username}) = lower(${normalizedReference})`);
+  return inviter ?? null;
+}
+
+async function notifyOwnerReferral(
+  bot: MyBot,
+  user: { id: number; firstName: string; username?: string },
+  inviter: { id: number; firstName: string | null; username: string | null }
+): Promise<void> {
+  const ownerIdStr = process.env["BOT_OWNER_ID"];
+  if (!ownerIdStr) return;
+
+  const userLabel = `${escapeMarkdown(user.firstName)}${user.username ? ` (@${escapeMarkdown(user.username)})` : ""}`;
+  const inviterLabel = `${escapeMarkdown(inviter.firstName ?? "Unknown")}${inviter.username ? ` (@${escapeMarkdown(inviter.username)})` : ""}`;
+
+  await bot.api.sendMessage(
+    parseInt(ownerIdStr),
+    `✅ *REFERRAL VERIFIED — ACCESS GRANTED*\n━━━━━━━━━━━━━━━━━━\n\n` +
+      `👤 New user: ${userLabel}\n🆔 User ID: \`${user.id}\`\n\n` +
+      `🤝 Invited by: ${inviterLabel}\n🆔 Inviter ID: \`${inviter.id}\`\n\n` +
+      `_The inviter is a registered bot user, so access was approved automatically._`,
+    { parse_mode: "Markdown" }
+  ).catch((err) => logger.error({ err }, "notifyOwnerReferral failed"));
+}
+
 // ── Invite code handler ───────────────────────────────────────────────────────
 
 export async function handleInviteCode(bot: MyBot, ctx: BotContext, code: string): Promise<void> {
   const userId = ctx.from!.id;
   const name = ctx.from!.first_name ?? "User";
+  const normalizedCode = code.trim().toUpperCase();
 
   try {
-    const [invite] = await db.select().from(inviteCodesTable).where(eq(inviteCodesTable.code, code.toUpperCase()));
+    const [existingAccess] = await db
+      .select({ tier: accessTable.tier, isApproved: accessTable.isApproved })
+      .from(accessTable)
+      .where(eq(accessTable.userId, userId));
 
-    if (!invite || !invite.isActive) {
-      await ctx.reply("❌ *Invalid or expired invite code.*", { parse_mode: "Markdown" });
-      return;
-    }
-    if (invite.expiresAt && invite.expiresAt < new Date()) {
-      await ctx.reply("❌ *This invite code has expired.*", { parse_mode: "Markdown" });
-      return;
-    }
-    if (invite.usedCount >= invite.maxUses) {
-      await ctx.reply("❌ *This invite code has reached its usage limit.*", { parse_mode: "Markdown" });
+    if (existingAccess?.tier === "blocked") {
+      await ctx.reply("🚫 *Access Denied*\n\nYour account has been blocked. Contact the owner if you believe this is a mistake.", { parse_mode: "Markdown" });
       return;
     }
 
-    // Upsert access record
+    const [invite] = await db.select().from(inviteCodesTable).where(eq(inviteCodesTable.code, normalizedCode));
+
+    if (invite) {
+      if (!invite.isActive) {
+        await ctx.reply("❌ *Invalid or expired invite code.*", { parse_mode: "Markdown" });
+        return;
+      }
+      if (invite.expiresAt && invite.expiresAt < new Date()) {
+        await ctx.reply("❌ *This invite code has expired.*", { parse_mode: "Markdown" });
+        return;
+      }
+      if (invite.usedCount >= invite.maxUses) {
+        await ctx.reply("❌ *This invite code has reached its usage limit.*", { parse_mode: "Markdown" });
+        return;
+      }
+
+      await db.insert(accessTable).values({
+        userId,
+        username: ctx.from!.username,
+        firstName: name,
+        tier: invite.tier,
+        isApproved: true,
+        isPending: false,
+        approvedAt: new Date(),
+        inviteCode: normalizedCode,
+        invitedBy: null,
+      }).onConflictDoUpdate({
+        target: accessTable.userId,
+        set: { tier: invite.tier, isApproved: true, isPending: false, approvedAt: new Date(), inviteCode: normalizedCode, invitedBy: null },
+      });
+
+      await db.update(inviteCodesTable)
+        .set({ usedCount: invite.usedCount + 1 })
+        .where(eq(inviteCodesTable.id, invite.id));
+
+      if (invite.usedCount + 1 >= invite.maxUses) {
+        await db.update(inviteCodesTable).set({ isActive: false }).where(eq(inviteCodesTable.id, invite.id));
+      }
+
+      const tierLabel = TIER_LABEL[invite.tier] ?? invite.tier;
+      const tierEmoji = TIER_EMOJI[invite.tier] ?? "✅";
+
+      await ctx.reply(
+        `${tierEmoji} *Access Granted!*\n━━━━━━━━━━━━━━━━━━\n\nWelcome, *${name}*!\n\nTier: *${tierLabel}*\n\n_You now have full access. Use the menu below._`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: new InlineKeyboard().text("⚡ Open Bot Panel", "menu:main"),
+        }
+      );
+
+      const ownerIdStr = process.env["BOT_OWNER_ID"];
+      if (ownerIdStr) {
+        await bot.api.sendMessage(
+          parseInt(ownerIdStr),
+          `✅ *Invite Used*\n\n👤 ${name}${ctx.from!.username ? ` (@${ctx.from!.username})` : ""}\n🎟️ Code: \`${normalizedCode}\`\n${tierEmoji} Tier: ${tierLabel}`,
+          { parse_mode: "Markdown" }
+        ).catch(() => {});
+      }
+      return;
+    }
+
+    const inviter = await findRegisteredInviter(code);
+    if (!inviter) {
+      await ctx.reply("❌ *Invalid invite.* Send the username or Telegram ID of a registered bot user.", { parse_mode: "Markdown" });
+      return;
+    }
+    if (inviter.id === userId) {
+      await ctx.reply("❌ *You cannot use your own username or ID as an invite.*", { parse_mode: "Markdown" });
+      return;
+    }
+
+    const grantedTier = existingAccess?.isApproved ? existingAccess.tier : "free";
+
     await db.insert(accessTable).values({
       userId,
       username: ctx.from!.username,
       firstName: name,
-      tier: invite.tier,
+      tier: grantedTier,
       isApproved: true,
       isPending: false,
       approvedAt: new Date(),
-      inviteCode: code.toUpperCase(),
+      inviteCode: code.trim(),
+      invitedBy: inviter.id,
     }).onConflictDoUpdate({
       target: accessTable.userId,
-      set: { tier: invite.tier, isApproved: true, isPending: false, approvedAt: new Date(), inviteCode: code.toUpperCase() },
+      set: {
+        tier: grantedTier,
+        isApproved: true,
+        isPending: false,
+        approvedAt: new Date(),
+        inviteCode: code.trim(),
+        invitedBy: inviter.id,
+      },
     });
 
-    // Increment usage
-    await db.update(inviteCodesTable)
-      .set({ usedCount: invite.usedCount + 1 })
-      .where(eq(inviteCodesTable.id, invite.id));
-
-    if (invite.usedCount + 1 >= invite.maxUses) {
-      await db.update(inviteCodesTable).set({ isActive: false }).where(eq(inviteCodesTable.id, invite.id));
-    }
-
-    const tierLabel = TIER_LABEL[invite.tier] ?? invite.tier;
-    const tierEmoji = TIER_EMOJI[invite.tier] ?? "✅";
-
     await ctx.reply(
-      `${tierEmoji} *Access Granted!*\n━━━━━━━━━━━━━━━━━━\n\nWelcome, *${name}*!\n\nTier: *${tierLabel}*\n\n_You now have full access. Use the menu below._`,
-      {
-        parse_mode: "Markdown",
-        reply_markup: new InlineKeyboard().text("⚡ Open Bot Panel", "menu:main"),
-      }
+      `✅ *Referral Verified — Access Granted!*\n━━━━━━━━━━━━━━━━━━\n\nYour inviter is a registered bot user, so your *${TIER_LABEL[grantedTier] ?? grantedTier}* access has been approved automatically.\n\n_Use the menu below to get started._`,
+      { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("⚡ Open Bot Panel", "menu:main") }
     );
-
-    // Notify owner
-    const ownerIdStr = process.env["BOT_OWNER_ID"];
-    if (ownerIdStr) {
-      await bot.api.sendMessage(
-        parseInt(ownerIdStr),
-        `✅ *Invite Used*\n\n👤 ${name}${ctx.from!.username ? ` (@${ctx.from!.username})` : ""}\n🎟️ Code: \`${code.toUpperCase()}\`\n${tierEmoji} Tier: ${tierLabel}`,
-        { parse_mode: "Markdown" }
-      ).catch(() => {});
-    }
+    await notifyOwnerReferral(bot, { id: userId, firstName: name, username: ctx.from!.username }, inviter);
   } catch (err) {
     logger.error({ err }, "handleInviteCode error");
     await ctx.reply("❌ Failed to process invite code.");
@@ -304,7 +396,7 @@ export function registerAccessHandlers(bot: MyBot): void {
   bot.callbackQuery("access:invite", async (ctx) => {
     await ctx.answerCallbackQuery();
     ctx.session.pendingAction = "access:code";
-    await ctx.reply(`🎟️ *INVITE CODE*\n\nSend your invite code:`, { parse_mode: "Markdown" });
+    await ctx.reply(`🎟️ *INVITE CODE*\n\nSend an owner-issued code, or the @username / Telegram ID of the registered user who invited you:`, { parse_mode: "Markdown" });
   });
 
   // ── Owner: approve callback ────────────────────────────────────────────────
@@ -408,7 +500,7 @@ export function registerAccessHandlers(bot: MyBot): void {
     const lines = filtered.length === 0 ? "_None._"
       : filtered.map((a) =>
         `${TIER_EMOJI[a.tier] ?? "⚪"} *${a.firstName ?? "Unknown"}*${a.username ? ` @${a.username}` : ""} \`${a.userId}\`\n` +
-        `   ${a.isPending ? "⏳ Pending" : a.isApproved ? "✅ Approved" : "❌ Not approved"} · ${a.tier}\n` +
+        `   ${a.isPending ? "⏳ Pending" : a.isApproved ? "✅ Approved" : "❌ Not approved"} · ${a.tier}${a.invitedBy ? ` · Invited by \`${a.invitedBy}\`` : ""}\n` +
         `   Last seen: ${a.lastSeenAt ? new Date(a.lastSeenAt).toDateString() : "Never"}`
       ).join("\n\n");
 
