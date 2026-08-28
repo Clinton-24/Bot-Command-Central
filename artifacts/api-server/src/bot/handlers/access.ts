@@ -126,8 +126,8 @@ export async function checkCrescentAccess(ctx: BotContext): Promise<boolean> {
 
     return true;
   } catch (err) {
-    logger.error({ err }, "checkCrescentAccess error");
-    return false;
+    logger.warn({ err, userId }, "Crescent access lookup unavailable; allowing chat access");
+    return true;
   }
 }
 
