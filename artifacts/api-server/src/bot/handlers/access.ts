@@ -153,20 +153,53 @@ async function notifyOwner(bot: MyBot, userId: number, name: string, username: s
     return;
   }
   const ownerId = parseInt(ownerIdStr);
-  logger.info({ ownerId, userId }, "Sending owner notification");
+  
+  // Generate temporary 6-digit code valid for 1 minute
+  const tempCode = Math.floor(100000 + Math.random() * 900000).toString();
+  const expiresAt = new Date(Date.now() + 60000); // 1 minute from now
+  
+  // Store temporary code in database
+  try {
+    await db.insert(accessTable).values({
+      userId,
+      username: username ?? null,
+      firstName: name,
+      tier: "free",
+      isApproved: false,
+      isPending: true,
+      requestMessage: message.slice(0, 300),
+      inviteCode: tempCode,
+      expiresAt,
+    }).onConflictDoUpdate({
+      target: accessTable.userId,
+      set: { 
+        isPending: true, 
+        requestMessage: message.slice(0, 300), 
+        username: username ?? null, 
+        firstName: name,
+        inviteCode: tempCode,
+        expiresAt,
+      },
+    });
+  } catch (err) {
+    logger.error({ err }, "Failed to store temporary code");
+  }
+  
+  logger.info({ ownerId, userId, tempCode }, "Sending owner notification with temporary code");
   
   try {
     await bot.api.sendMessage(
       ownerId,
-      `🔔 *NEW ACCESS REQUEST*\n━━━━━━━━━━━━━━━━━━\n\n` +
-      `👤 *${name}*${username ? ` (@${username})` : ""}\n🆔 \`${userId}\`\n\n💬 _"${message}"_`,
+      `🔔 *Access Request*\n━━━━━━━━━━━━━━━━━━\n\n` +
+      `👤 ${name}${username ? ` (@${username})` : ""}\n🆔 \`${userId}\`\n\n💬 "${message.slice(0, 100)}${message.length > 100 ? '...' : ''}"\n\n` +
+      `🔑 Temporary Code: \`${tempCode}\`\n⏰ Valid for 1 minute`,
       {
         parse_mode: "Markdown",
         reply_markup: new InlineKeyboard()
-          .text("✅ Free", `access:approve:${userId}:free`)
-          .text("💎 Premium", `access:approve:${userId}:premium`)
+          .text("✅ Approve Free", `access:approve:${userId}:free`)
+          .text("💎 Approve Premium", `access:approve:${userId}:premium`)
           .row()
-          .text("👑 VIP", `access:approve:${userId}:vip`)
+          .text("👑 Approve VIP", `access:approve:${userId}:vip`)
           .text("🚫 Deny", `access:deny:${userId}`),
       }
     );
@@ -181,9 +214,47 @@ async function notifyOwner(bot: MyBot, userId: number, name: string, username: s
 export async function handleInviteCode(bot: MyBot, ctx: BotContext, code: string): Promise<void> {
   const userId = ctx.from!.id;
   const name = ctx.from!.first_name ?? "User";
-  const upper = code.trim().toUpperCase();
+  const inputCode = code.trim();
 
   try {
+    // First check if it's a temporary 6-digit code from access request
+    if (/^\d{6}$/.test(inputCode)) {
+      const [accessRecord] = await db.select().from(accessTable).where(eq(accessTable.userId, userId));
+      
+      if (accessRecord && accessRecord.inviteCode === inputCode && accessRecord.expiresAt && accessRecord.expiresAt > new Date()) {
+        // Valid temporary code within time window
+        await db.update(accessTable).set({
+          isApproved: true,
+          isPending: false,
+          approvedAt: new Date(),
+          approvedBy: parseInt(process.env["BOT_OWNER_ID"] || "0"),
+          expiresAt: null, // Clear expiry since access is now granted
+        }).where(eq(accessTable.userId, userId));
+
+        await ctx.reply(
+          `✅ *Access Granted!*\n━━━━━━━━━━━━━━━━━━\n\nWelcome, *${name}*!\n\n_You now have full access._`,
+          { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("⚡ Open Bot Panel", "menu:main") }
+        );
+
+        const ownerIdStr = process.env["BOT_OWNER_ID"];
+        if (ownerIdStr) {
+          await bot.api.sendMessage(parseInt(ownerIdStr),
+            `✅ *Access Granted*\n\n👤 ${name}${ctx.from!.username ? ` (@${ctx.from!.username})` : ""}\n🆔 \`${userId}\`\n🔑 Used code: \`${inputCode}\``,
+            { parse_mode: "Markdown" }
+          ).catch(() => {});
+        }
+        return;
+      } else if (accessRecord && accessRecord.inviteCode === inputCode) {
+        await ctx.reply("❌ *Code expired.*\n\nThe temporary code has expired. Please request access again.", { parse_mode: "Markdown" });
+        return;
+      } else {
+        await ctx.reply("❌ *Invalid code.*\n\nThis code doesn't match your request.", { parse_mode: "Markdown" });
+        return;
+      }
+    }
+
+    // Handle regular invite codes (uppercase alphanumeric)
+    const upper = inputCode.toUpperCase();
     const [invite] = await db.select().from(inviteCodesTable).where(eq(inviteCodesTable.code, upper));
 
     if (!invite || !invite.isActive) { await ctx.reply("❌ *Invalid or expired invite code.*", { parse_mode: "Markdown" }); return; }
@@ -221,7 +292,7 @@ export async function handleInviteCode(bot: MyBot, ctx: BotContext, code: string
     }
   } catch (err) {
     logger.error({ err }, "handleInviteCode error");
-    await ctx.reply("❌ Failed to process invite code. Please try again.");
+    await ctx.reply("❌ Failed to process code. Please try again.");
   }
 }
 
@@ -442,20 +513,11 @@ export async function processAccessInput(bot: MyBot, ctx: BotContext, action: st
 
   if (action === "access:message") {
     try {
-      await db.insert(accessTable).values({
-        userId, username: ctx.from!.username, firstName: name,
-        tier: "free", isApproved: false, isPending: true,
-        requestMessage: text.slice(0, 300),
-      }).onConflictDoUpdate({
-        target: accessTable.userId,
-        set: { isPending: true, requestMessage: text.slice(0, 300), username: ctx.from!.username, firstName: name },
-      });
-
+      await notifyOwner(bot, userId, name, ctx.from!.username, text);
       await ctx.reply(
-        `✅ *Request Submitted!*\n━━━━━━━━━━━━━━━━━━\n\nYour request has been sent to the owner.\n\n_You'll be notified once it's reviewed._`,
+        `✅ *Request Sent*\n━━━━━━━━━━━━━━━━━━\n\nYour request has been sent to the owner.\n\n🔑 *Enter the 6-digit code* the owner provides within 1 minute to gain access.`,
         { parse_mode: "Markdown" }
       );
-      await notifyOwner(bot, userId, name, ctx.from!.username, text);
     } catch (err) {
       logger.error({ err }, "processAccessInput error");
       await ctx.reply(`❌ Failed to submit: ${err instanceof Error ? err.message : "Unknown error"}`);
