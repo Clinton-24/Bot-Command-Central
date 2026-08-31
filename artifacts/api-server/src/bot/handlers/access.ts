@@ -157,11 +157,15 @@ async function sendRequestAccessMessage(ctx: BotContext): Promise<void> {
 
 async function notifyOwnerRequest(bot: MyBot, userId: number, name: string, username: string | undefined, message: string): Promise<void> {
   const ownerIdStr = process.env["BOT_OWNER_ID"];
+  logger.info({ ownerIdStr, userId, name, username }, "notifyOwnerRequest called");
+  
   if (!ownerIdStr) {
     logger.warn("BOT_OWNER_ID not set — cannot notify owner of access request");
     return;
   }
   const ownerId = parseInt(ownerIdStr);
+  logger.info({ ownerId, userId }, "Sending owner notification");
+  
   try {
     await bot.api.sendMessage(
       ownerId,
@@ -176,8 +180,9 @@ async function notifyOwnerRequest(bot: MyBot, userId: number, name: string, user
           .text("🚫 Deny", `access:deny:${userId}`),
       }
     );
+    logger.info({ ownerId, userId }, "Owner notification sent successfully");
   } catch (err) {
-    logger.error({ err }, "notifyOwnerRequest failed");
+    logger.error({ err, ownerId, userId }, "notifyOwnerRequest failed");
   }
 }
 
