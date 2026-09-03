@@ -15,6 +15,12 @@ import type { BotContext } from "../context";
 import { isOwner } from "../helpers";
 import { logger } from "../../lib/logger";
 
+// Sanitise user text — strip chars that break Telegram Markdown v1
+function esc(t: string | undefined | null): string {
+  if (!t) return "";
+  return t.replace(/\*/g, "").replace(/_/g, "").replace(/`/g, "").replace(/\[/g, "(").replace(/\]/g, ")");
+}
+
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const TIER_RANK: Record<string, number> = { free: 1, premium: 2, vip: 3 };
@@ -125,7 +131,7 @@ async function showAccessGate(ctx: BotContext): Promise<void> {
   const name = ctx.from?.first_name ?? "User";
   const text =
     `🔐 *ACCESS REQUIRED*\n━━━━━━━━━━━━━━━━━━\n\n` +
-    `Welcome, *${name}*.\n\n` +
+    `Welcome, *${esc(name)}*.\n\n` +
     `This is a *private bot*. You need approval to access its features.\n\n` +
     `_Submit a request and the owner will review it._`;
   const kb = new InlineKeyboard()
@@ -191,7 +197,7 @@ async function notifyOwner(bot: MyBot, userId: number, name: string, username: s
     await bot.api.sendMessage(
       ownerId,
       `🔔 *Access Request*\n━━━━━━━━━━━━━━━━━━\n\n` +
-      `👤 ${name}${username ? ` (@${username})` : ""}\n🆔 \`${userId}\`\n\n💬 "${message.slice(0, 100)}${message.length > 100 ? '...' : ''}"\n\n` +
+      `👤 ${name}${username ? ` (@${esc(username)})` : ""}\n🆔 \`${userId}\`\n\n💬 "${message.slice(0, 100)}${message.length > 100 ? '...' : ''}"\n\n` +
       `🔑 Temporary Code: \`${tempCode}\`\n⏰ Valid for 1 minute`,
       {
         parse_mode: "Markdown",
@@ -232,14 +238,14 @@ export async function handleInviteCode(bot: MyBot, ctx: BotContext, code: string
         }).where(eq(accessTable.userId, userId));
 
         await ctx.reply(
-          `✅ *Access Granted!*\n━━━━━━━━━━━━━━━━━━\n\nWelcome, *${name}*!\n\n_You now have full access._`,
+          `✅ *Access Granted!*\n━━━━━━━━━━━━━━━━━━\n\nWelcome, *${esc(name)}*!\n\n_You now have full access._`,
           { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("⚡ Open Bot Panel", "menu:main") }
         );
 
         const ownerIdStr = process.env["BOT_OWNER_ID"];
         if (ownerIdStr) {
           await bot.api.sendMessage(parseInt(ownerIdStr),
-            `✅ *Access Granted*\n\n👤 ${name}${ctx.from!.username ? ` (@${ctx.from!.username})` : ""}\n🆔 \`${userId}\`\n🔑 Used code: \`${inputCode}\``,
+            `✅ *Access Granted*\n\n👤 ${name}${ctx.from!.username ? ` (@${esc(ctx.from!.username)})` : ""}\n🆔 \`${userId}\`\n🔑 Used code: \`${inputCode}\``,
             { parse_mode: "Markdown" }
           ).catch(() => {});
         }
@@ -279,14 +285,14 @@ export async function handleInviteCode(bot: MyBot, ctx: BotContext, code: string
     const label = TIER_LABEL[invite.tier] ?? invite.tier;
 
     await ctx.reply(
-      `${emoji} *Access Granted!*\n━━━━━━━━━━━━━━━━━━\n\nWelcome, *${name}*!\n\nTier: *${label}*\n\n_You now have full access._`,
+      `${emoji} *Access Granted!*\n━━━━━━━━━━━━━━━━━━\n\nWelcome, *${esc(name)}*!\n\nTier: *${label}*\n\n_You now have full access._`,
       { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("⚡ Open Bot Panel", "menu:main") }
     );
 
     const ownerIdStr = process.env["BOT_OWNER_ID"];
     if (ownerIdStr) {
       await bot.api.sendMessage(parseInt(ownerIdStr),
-        `✅ *Invite Used*\n\n👤 ${name}${ctx.from!.username ? ` (@${ctx.from!.username})` : ""}\n🎟️ Code: \`${upper}\`\n${emoji} Tier: ${label}`,
+        `✅ *Invite Used*\n\n👤 ${name}${ctx.from!.username ? ` (@${esc(ctx.from!.username)})` : ""}\n🎟️ Code: \`${upper}\`\n${emoji} Tier: ${label}`,
         { parse_mode: "Markdown" }
       ).catch(() => {});
     }
@@ -434,7 +440,7 @@ export function registerAccessHandlers(bot: MyBot): void {
 
       const lines = filtered.length === 0 ? "_None._"
         : filtered.map((a) =>
-          `${TIER_EMOJI[a.tier] ?? "⚪"} *${a.firstName ?? "Unknown"}*${a.username ? ` @${a.username}` : ""} \`${a.userId}\`\n` +
+          `${TIER_EMOJI[a.tier] ?? "⚪"} *${esc(a.firstName ?? "Unknown")}*${a.username ? ` @${esc(a.username)}` : ""} \`${a.userId}\`\n` +
           `   ${a.isPending ? "⏳ Pending" : a.isApproved ? "✅ Approved" : "❌ Not approved"} · ${a.tier}\n` +
           `   Last seen: ${a.lastSeenAt ? new Date(a.lastSeenAt).toDateString() : "Never"}`
         ).join("\n\n");
