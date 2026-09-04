@@ -1,10 +1,9 @@
 /**
  * ACCESS CONTROL SYSTEM
  * ─────────────────────────────────────────────────────────────────────────────
- * Tiers:   free | premium | vip | blocked
- * Flow:    /start → gate → request access → owner approves → unlocked
- * Invites: owner generates codes → user uses /start <code> → instant access
- * Guard:   checkAccess(ctx, "premium") → blocks if tier too low
+ * Flow A (OTP): user requests → OTP sent to owner → owner forwards to user → user enters within 60s
+ * Flow B (Invite): owner generates code → shares link → user enters code → instant access
+ * Flow C (Simple): user taps Request → owner gets Confirm/Decline buttons → one-by-one or all
  */
 
 import { InlineKeyboard } from "grammy";
@@ -15,13 +14,22 @@ import type { BotContext } from "../context";
 import { isOwner } from "../helpers";
 import { logger } from "../../lib/logger";
 
-// Sanitise user text — strip chars that break Telegram Markdown v1
-function esc(t: string | undefined | null): string {
+// ── Safe text — strips ALL Markdown special chars from user-provided strings ──
+function s(t: string | undefined | null): string {
   if (!t) return "";
-  return t.replace(/\*/g, "").replace(/_/g, "").replace(/`/g, "").replace(/\[/g, "(").replace(/\]/g, ")");
+  return t
+    .replace(/\\/g, "")
+    .replace(/\*/g, "")
+    .replace(/_/g, " ")
+    .replace(/`/g, "")
+    .replace(/\[/g, "(")
+    .replace(/\]/g, ")")
+    .replace(/~/g, "")
+    .replace(/>/g, "")
+    .replace(/\|/g, " ");
 }
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// ── Tier config ───────────────────────────────────────────────────────────────
 
 const TIER_RANK: Record<string, number> = { free: 1, premium: 2, vip: 3 };
 export const TIER_EMOJI: Record<string, string> = { free: "🟢", premium: "💎", vip: "👑", blocked: "🚫" };
@@ -31,15 +39,30 @@ export function tierRank(tier: string): number {
   return TIER_RANK[tier] ?? 0;
 }
 
-// ── Get user record ───────────────────────────────────────────────────────────
+// ── In-memory OTP store ───────────────────────────────────────────────────────
+
+interface PendingOTP {
+  otp: string;
+  expiresAt: number;
+  tier: "free" | "premium" | "vip";
+  name: string;
+  username?: string;
+}
+
+const pendingOTPs = new Map<number, PendingOTP>();
+
+function generateCode(len = 6): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  return Array.from({ length: len }, () => chars[Math.floor(Math.random() * chars.length)]).join("");
+}
+
+// ── DB helpers ────────────────────────────────────────────────────────────────
 
 export async function getAccess(userId: number) {
   try {
-    const [record] = await db.select().from(accessTable).where(eq(accessTable.userId, userId));
-    return record ?? null;
-  } catch {
-    return null;
-  }
+    const [r] = await db.select().from(accessTable).where(eq(accessTable.userId, userId));
+    return r ?? null;
+  } catch { return null; }
 }
 
 // ── Core access guard ─────────────────────────────────────────────────────────
@@ -53,52 +76,29 @@ export async function checkAccess(
   if (isOwner(userId)) return true;
 
   try {
-    const record = await getAccess(userId);
+    const rec = await getAccess(userId);
 
-    if (!record) { await showAccessGate(ctx); return false; }
-
-    if (record.tier === "blocked") {
-      await ctx.reply(
-        `🚫 *Access Denied*\n━━━━━━━━━━━━━━━━━━\n\nYour account has been blocked.${record.blockedReason ? `\n_Reason: ${record.blockedReason}_` : ""}`,
-        { parse_mode: "Markdown" }
-      );
+    if (!rec || !rec.isApproved) {
+      await showGate(ctx);
       return false;
     }
-
-    if (!record.isApproved) {
-      if (record.isPending) {
-        await ctx.reply(
-          `⏳ *Pending Approval*\n━━━━━━━━━━━━━━━━━━\n\nYour request is being reviewed.\n\n_You'll be notified once approved._`,
-          { parse_mode: "Markdown" }
-        );
-      } else {
-        await showAccessGate(ctx);
-      }
+    if (rec.tier === "blocked") {
+      await ctx.reply(`🚫 *Access Denied*\n\nYour account has been blocked.${rec.blockedReason ? `\n_Reason: ${s(rec.blockedReason)}_` : ""}`, { parse_mode: "Markdown" });
       return false;
     }
-
-    if (record.expiresAt && record.expiresAt < new Date()) {
-      await db.update(accessTable).set({ isApproved: false, isPending: false }).where(eq(accessTable.userId, userId));
-      await ctx.reply(
-        `⏰ *Access Expired*\n━━━━━━━━━━━━━━━━━━\n\nYour access has expired.`,
-        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🔑 Request Renewal", "access:request") }
-      );
+    if (rec.expiresAt && rec.expiresAt < new Date()) {
+      await db.update(accessTable).set({ isApproved: false }).where(eq(accessTable.userId, userId));
+      await showGate(ctx, true);
       return false;
     }
-
-    if (tierRank(record.tier) < tierRank(requiredTier)) {
-      await ctx.reply(
-        `💎 *${TIER_LABEL[requiredTier]} Required*\n━━━━━━━━━━━━━━━━━━\n\nThis feature requires *${TIER_LABEL[requiredTier]}* access.\nYour tier: ${TIER_EMOJI[record.tier] ?? ""} *${TIER_LABEL[record.tier] ?? record.tier}*\n\n_Contact the owner to upgrade._`,
-        { parse_mode: "Markdown" }
-      );
+    if (tierRank(rec.tier) < tierRank(requiredTier)) {
+      await ctx.reply(`💎 *${TIER_LABEL[requiredTier]} Required*\n\nYour tier: ${TIER_EMOJI[rec.tier] ?? ""} *${TIER_LABEL[rec.tier] ?? rec.tier}*\n\n_Contact the owner to upgrade._`, { parse_mode: "Markdown" });
       return false;
     }
-
-    await db.update(accessTable)
-      .set({ lastSeenAt: new Date(), totalMessages: (record.totalMessages ?? 0) + 1 })
+    db.update(accessTable)
+      .set({ lastSeenAt: new Date(), totalMessages: (rec.totalMessages ?? 0) + 1 })
       .where(eq(accessTable.userId, userId))
       .catch(() => {});
-
     return true;
   } catch (err) {
     logger.error({ err }, "checkAccess error");
@@ -111,15 +111,16 @@ export async function checkCrescentAccess(ctx: BotContext): Promise<boolean> {
   if (!userId) return false;
   if (isOwner(userId)) return true;
   try {
-    const record = await getAccess(userId);
-    if (record?.tier === "blocked") {
-      await ctx.reply(`🚫 *Access Denied*\n\nYour account has been blocked.`, { parse_mode: "Markdown" });
+    const rec = await getAccess(userId);
+    if (rec?.tier === "blocked") {
+      await ctx.reply("🚫 Your account has been blocked.");
       return false;
     }
-    if (record) {
-      await db.update(accessTable)
-        .set({ lastSeenAt: new Date(), totalMessages: (record.totalMessages ?? 0) + 1 })
-        .where(eq(accessTable.userId, userId)).catch(() => {});
+    if (rec) {
+      db.update(accessTable)
+        .set({ lastSeenAt: new Date(), totalMessages: (rec.totalMessages ?? 0) + 1 })
+        .where(eq(accessTable.userId, userId))
+        .catch(() => {});
     }
     return true;
   } catch { return true; }
@@ -127,16 +128,15 @@ export async function checkCrescentAccess(ctx: BotContext): Promise<boolean> {
 
 // ── Access gate ───────────────────────────────────────────────────────────────
 
-async function showAccessGate(ctx: BotContext): Promise<void> {
-  const name = ctx.from?.first_name ?? "User";
-  const text =
-    `🔐 *ACCESS REQUIRED*\n━━━━━━━━━━━━━━━━━━\n\n` +
-    `Welcome, *${esc(name)}*.\n\n` +
-    `This is a *private bot*. You need approval to access its features.\n\n` +
-    `_Submit a request and the owner will review it._`;
+async function showGate(ctx: BotContext, expired = false): Promise<void> {
+  const name = s(ctx.from?.first_name ?? "User");
+  const text = expired
+    ? `⏰ *Access Expired*\n\nWelcome back, ${name}.\n\nYour access has expired. Request access again below.`
+    : `🔐 *PRIVATE BOT*\n\nWelcome, ${name}.\n\nThis bot requires approval to use.\nTap below to request access:`;
+
   const kb = new InlineKeyboard()
     .text("🔑 Request Access", "access:request")
-    .text("🎟️ I Have an Invite Code", "access:invite");
+    .text("🎟️ Enter Code", "access:enter_code");
 
   if (ctx.callbackQuery) {
     await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: kb }).catch(() =>
@@ -148,124 +148,123 @@ async function showAccessGate(ctx: BotContext): Promise<void> {
   }
 }
 
-// ── Notify owner ──────────────────────────────────────────────────────────────
+// ── Notify owner of access request ───────────────────────────────────────────
 
-async function notifyOwner(bot: MyBot, userId: number, name: string, username: string | undefined, message: string): Promise<void> {
+async function notifyOwner(bot: MyBot, userId: number, name: string, username: string | undefined): Promise<void> {
   const ownerIdStr = process.env["BOT_OWNER_ID"];
-  logger.info({ ownerIdStr, userId, name, username }, "notifyOwnerRequest called");
-  
-  if (!ownerIdStr) {
-    logger.warn("BOT_OWNER_ID not set — cannot notify owner of access request");
+  if (!ownerIdStr) { logger.warn("BOT_OWNER_ID not set"); return; }
+
+  const displayName = s(name);
+  const displayUser = username ? ` (@${s(username)})` : "";
+
+  await bot.api.sendMessage(
+    parseInt(ownerIdStr),
+    `🔔 *ACCESS REQUEST*\n━━━━━━━━━━━━━━━━━━\n\n` +
+    `👤 ${displayName}${displayUser}\n` +
+    `🆔 \`${userId}\`\n\n` +
+    `_Approve or decline:_`,
+    {
+      parse_mode: "Markdown",
+      reply_markup: new InlineKeyboard()
+        .text("✅ Approve Free", `access:approve:${userId}:free`)
+        .text("💎 Premium", `access:approve:${userId}:premium`)
+        .row()
+        .text("👑 VIP", `access:approve:${userId}:vip`)
+        .text("🚫 Decline", `access:deny:${userId}`),
+    }
+  ).catch((err) => logger.error({ err }, "notifyOwner failed"));
+}
+
+// ── OTP verification ──────────────────────────────────────────────────────────
+
+async function verifyOTP(bot: MyBot, ctx: BotContext, code: string): Promise<void> {
+  const userId = ctx.from!.id;
+  const entry = pendingOTPs.get(userId);
+
+  if (!entry) {
+    await ctx.reply(`❌ *No active code*\n\nRequest a new one:`, {
+      parse_mode: "Markdown",
+      reply_markup: new InlineKeyboard().text("🔑 Request Access", "access:request"),
+    });
     return;
   }
-  const ownerId = parseInt(ownerIdStr);
-  
-  // Generate temporary 6-digit code valid for 1 minute
-  const tempCode = Math.floor(100000 + Math.random() * 900000).toString();
-  const expiresAt = new Date(Date.now() + 60000); // 1 minute from now
-  
-  // Store temporary code in database
+  if (Date.now() > entry.expiresAt) {
+    pendingOTPs.delete(userId);
+    await ctx.reply(`⏰ *Code expired*\n\nRequest a new code:`, {
+      parse_mode: "Markdown",
+      reply_markup: new InlineKeyboard().text("🔑 Request Again", "access:request"),
+    });
+    return;
+  }
+  if (code.trim().toUpperCase() !== entry.otp) {
+    const secs = Math.max(0, Math.round((entry.expiresAt - Date.now()) / 1000));
+    await ctx.reply(`❌ *Wrong code*\n\n_${secs}s remaining to retry._`, { parse_mode: "Markdown" });
+    return;
+  }
+
+  pendingOTPs.delete(userId);
+  await approveUser(bot, ctx, userId, entry.tier, s(entry.name), entry.username);
+}
+
+// ── Core approve function ─────────────────────────────────────────────────────
+
+async function approveUser(
+  bot: MyBot,
+  ctx: BotContext | null,
+  userId: number,
+  tier: string,
+  displayName: string,
+  username?: string | null,
+): Promise<void> {
   try {
     await db.insert(accessTable).values({
       userId,
-      username: username ?? null,
-      firstName: name,
-      tier: "free",
-      isApproved: false,
-      isPending: true,
-      requestMessage: message.slice(0, 300),
-      inviteCode: tempCode,
-      expiresAt,
+      username: username ?? undefined,
+      firstName: displayName,
+      tier,
+      isApproved: true,
+      isPending: false,
+      approvedAt: new Date(),
     }).onConflictDoUpdate({
       target: accessTable.userId,
-      set: { 
-        isPending: true, 
-        requestMessage: message.slice(0, 300), 
-        username: username ?? null, 
-        firstName: name,
-        inviteCode: tempCode,
-        expiresAt,
-      },
+      set: { tier, isApproved: true, isPending: false, approvedAt: new Date() },
     });
-  } catch (err) {
-    logger.error({ err }, "Failed to store temporary code");
-  }
-  
-  logger.info({ ownerId, userId, tempCode }, "Sending owner notification with temporary code");
-  
-  try {
+
+    const emoji = TIER_EMOJI[tier] ?? "✅";
+    const label = TIER_LABEL[tier] ?? tier;
+
     await bot.api.sendMessage(
-      ownerId,
-      `🔔 *Access Request*\n━━━━━━━━━━━━━━━━━━\n\n` +
-      `👤 ${name}${username ? ` (@${esc(username)})` : ""}\n🆔 \`${userId}\`\n\n💬 "${message.slice(0, 100)}${message.length > 100 ? '...' : ''}"\n\n` +
-      `🔑 Temporary Code: \`${tempCode}\`\n⏰ Valid for 1 minute`,
-      {
-        parse_mode: "Markdown",
-        reply_markup: new InlineKeyboard()
-          .text("✅ Approve Free", `access:approve:${userId}:free`)
-          .text("💎 Approve Premium", `access:approve:${userId}:premium`)
-          .row()
-          .text("👑 Approve VIP", `access:approve:${userId}:vip`)
-          .text("🚫 Deny", `access:deny:${userId}`),
-      }
-    );
-    logger.info({ ownerId, userId }, "Owner notification sent successfully");
+      userId,
+      `${emoji} *Access Granted!*\n━━━━━━━━━━━━━━━━━━\n\nWelcome, ${displayName}!\n\nTier: *${label}*\n\n_You now have full access._`,
+      { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("⚡ Open Bot Panel", "menu:main") }
+    ).catch(() => {});
   } catch (err) {
-    logger.error({ err, ownerId, userId }, "notifyOwnerRequest failed");
+    logger.error({ err }, "approveUser error");
+    if (ctx) await ctx.reply(`❌ Failed to approve: ${err instanceof Error ? err.message : "Unknown"}`);
   }
 }
 
-// ── Invite code ───────────────────────────────────────────────────────────────
+// ── Invite code handler ───────────────────────────────────────────────────────
 
 export async function handleInviteCode(bot: MyBot, ctx: BotContext, code: string): Promise<void> {
   const userId = ctx.from!.id;
-  const name = ctx.from!.first_name ?? "User";
-  const inputCode = code.trim();
+  const name = s(ctx.from!.first_name ?? "User");
+  const upper = code.trim().toUpperCase();
 
+  // Check OTP first
+  const otpEntry = pendingOTPs.get(userId);
+  if (otpEntry && upper === otpEntry.otp) {
+    await verifyOTP(bot, ctx, upper);
+    return;
+  }
+
+  // Try permanent invite code
   try {
-    // First check if it's a temporary 6-digit code from access request
-    if (/^\d{6}$/.test(inputCode)) {
-      const [accessRecord] = await db.select().from(accessTable).where(eq(accessTable.userId, userId));
-      
-      if (accessRecord && accessRecord.inviteCode === inputCode && accessRecord.expiresAt && accessRecord.expiresAt > new Date()) {
-        // Valid temporary code within time window
-        await db.update(accessTable).set({
-          isApproved: true,
-          isPending: false,
-          approvedAt: new Date(),
-          approvedBy: parseInt(process.env["BOT_OWNER_ID"] || "0"),
-          expiresAt: null, // Clear expiry since access is now granted
-        }).where(eq(accessTable.userId, userId));
-
-        await ctx.reply(
-          `✅ *Access Granted!*\n━━━━━━━━━━━━━━━━━━\n\nWelcome, *${esc(name)}*!\n\n_You now have full access._`,
-          { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("⚡ Open Bot Panel", "menu:main") }
-        );
-
-        const ownerIdStr = process.env["BOT_OWNER_ID"];
-        if (ownerIdStr) {
-          await bot.api.sendMessage(parseInt(ownerIdStr),
-            `✅ *Access Granted*\n\n👤 ${name}${ctx.from!.username ? ` (@${esc(ctx.from!.username)})` : ""}\n🆔 \`${userId}\`\n🔑 Used code: \`${inputCode}\``,
-            { parse_mode: "Markdown" }
-          ).catch(() => {});
-        }
-        return;
-      } else if (accessRecord && accessRecord.inviteCode === inputCode) {
-        await ctx.reply("❌ *Code expired.*\n\nThe temporary code has expired. Please request access again.", { parse_mode: "Markdown" });
-        return;
-      } else {
-        await ctx.reply("❌ *Invalid code.*\n\nThis code doesn't match your request.", { parse_mode: "Markdown" });
-        return;
-      }
-    }
-
-    // Handle regular invite codes (uppercase alphanumeric)
-    const upper = inputCode.toUpperCase();
     const [invite] = await db.select().from(inviteCodesTable).where(eq(inviteCodesTable.code, upper));
 
-    if (!invite || !invite.isActive) { await ctx.reply("❌ *Invalid or expired invite code.*", { parse_mode: "Markdown" }); return; }
-    if (invite.expiresAt && invite.expiresAt < new Date()) { await ctx.reply("❌ *This invite code has expired.*", { parse_mode: "Markdown" }); return; }
-    if (invite.usedCount >= invite.maxUses) { await ctx.reply("❌ *This invite code has reached its usage limit.*", { parse_mode: "Markdown" }); return; }
+    if (!invite || !invite.isActive) { await ctx.reply("❌ Invalid or expired code."); return; }
+    if (invite.expiresAt && invite.expiresAt < new Date()) { await ctx.reply("❌ This code has expired."); return; }
+    if (invite.usedCount >= invite.maxUses) { await ctx.reply("❌ This code has reached its usage limit."); return; }
 
     await db.insert(accessTable).values({
       userId, username: ctx.from!.username, firstName: name,
@@ -276,23 +275,22 @@ export async function handleInviteCode(bot: MyBot, ctx: BotContext, code: string
       set: { tier: invite.tier, isApproved: true, isPending: false, approvedAt: new Date(), inviteCode: upper },
     });
 
-    await db.update(inviteCodesTable).set({ usedCount: invite.usedCount + 1 }).where(eq(inviteCodesTable.id, invite.id));
-    if (invite.usedCount + 1 >= invite.maxUses) {
-      await db.update(inviteCodesTable).set({ isActive: false }).where(eq(inviteCodesTable.id, invite.id));
-    }
+    await db.update(inviteCodesTable)
+      .set({ usedCount: invite.usedCount + 1, isActive: invite.usedCount + 1 < invite.maxUses })
+      .where(eq(inviteCodesTable.id, invite.id));
 
     const emoji = TIER_EMOJI[invite.tier] ?? "✅";
     const label = TIER_LABEL[invite.tier] ?? invite.tier;
 
     await ctx.reply(
-      `${emoji} *Access Granted!*\n━━━━━━━━━━━━━━━━━━\n\nWelcome, *${esc(name)}*!\n\nTier: *${label}*\n\n_You now have full access._`,
+      `${emoji} *Access Granted!*\n━━━━━━━━━━━━━━━━━━\n\nWelcome, ${name}!\n\nTier: *${label}*`,
       { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("⚡ Open Bot Panel", "menu:main") }
     );
 
     const ownerIdStr = process.env["BOT_OWNER_ID"];
     if (ownerIdStr) {
       await bot.api.sendMessage(parseInt(ownerIdStr),
-        `✅ *Invite Used*\n\n👤 ${name}${ctx.from!.username ? ` (@${esc(ctx.from!.username)})` : ""}\n🎟️ Code: \`${upper}\`\n${emoji} Tier: ${label}`,
+        `✅ *Invite Used*\n\n👤 ${name}${ctx.from!.username ? ` (@${s(ctx.from!.username)})` : ""}\n🎟️ Code: \`${upper}\`\n${emoji} ${label}`,
         { parse_mode: "Markdown" }
       ).catch(() => {});
     }
@@ -302,128 +300,178 @@ export async function handleInviteCode(bot: MyBot, ctx: BotContext, code: string
   }
 }
 
-// ── Owner panel keyboard ──────────────────────────────────────────────────────
-
-function accessPanelKeyboard(): InlineKeyboard {
-  return new InlineKeyboard()
-    .text("👥 All Users", "acl:users:all").text("⏳ Pending", "acl:users:pending").row()
-    .text("💎 Premium", "acl:users:premium").text("👑 VIP", "acl:users:vip").row()
-    .text("🚫 Blocked", "acl:users:blocked").text("🎟️ Invite Codes", "acl:invites").row()
-    .text("➕ Generate Invite", "acl:invite:generate").row()
-    .text("🔙 Hex Panel", "hex:main");
-}
-
-// ── Register ──────────────────────────────────────────────────────────────────
+// ── Register all handlers ─────────────────────────────────────────────────────
 
 export function registerAccessHandlers(bot: MyBot): void {
 
-  bot.command("access", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.reply("⛔ Owner only."); return; }
-    try {
-      const all = await db.select().from(accessTable);
-      const p = all.filter((a) => a.isPending).length;
-      const a = all.filter((a) => a.isApproved).length;
-      const b = all.filter((a) => a.tier === "blocked").length;
-      await ctx.reply(
-        `🔐 *ACCESS CONTROL*\n━━━━━━━━━━━━━━━━━━\n\n👥 Total: *${all.length}*\n✅ Approved: *${a}*\n⏳ Pending: *${p}*\n🚫 Blocked: *${b}*`,
-        { parse_mode: "Markdown", reply_markup: accessPanelKeyboard() }
-      );
-    } catch (err) { await ctx.reply(`❌ ${err instanceof Error ? err.message : "Error"}`); }
-  });
-
+  // ── User: Request Access button ────────────────────────────────────────────
   bot.callbackQuery("access:request", async (ctx) => {
     await ctx.answerCallbackQuery();
-    ctx.session.pendingAction = "access:message";
+    const userId = ctx.from.id;
+    const name = ctx.from.first_name ?? "User";
+
+    // Mark as pending in DB
+    try {
+      await db.insert(accessTable).values({
+        userId,
+        username: ctx.from.username,
+        firstName: name,
+        tier: "free",
+        isApproved: false,
+        isPending: true,
+        requestMessage: `Requested access at ${new Date().toISOString()}`,
+      }).onConflictDoUpdate({
+        target: accessTable.userId,
+        set: { isPending: true, username: ctx.from.username, firstName: name },
+      });
+    } catch (err) {
+      logger.error({ err }, "access:request DB error");
+    }
+
+    // Notify owner
+    await notifyOwner(bot, userId, name, ctx.from.username);
+
     await ctx.reply(
-      `💬 *REQUEST ACCESS*\n━━━━━━━━━━━━━━━━━━\n\nSend a short message explaining why you want access:\n\n_e.g. "Referred by @username" or "I'm a regular customer"_`,
-      { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("❌ Cancel", "menu:main") }
+      `✅ *Request Sent!*\n━━━━━━━━━━━━━━━━━━\n\nYour request has been sent to the owner.\n\n_You will be notified once approved._\n\nAlternatively, if you have an invite code:`,
+      { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🎟️ Enter Code", "access:enter_code") }
     );
   });
 
+  // ── User: Enter code button ────────────────────────────────────────────────
+  bot.callbackQuery("access:enter_code", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    ctx.session.pendingAction = "access:code";
+    await ctx.reply(`🎟️ *ENTER CODE*\n\nSend your invite code or one-time code:`, { parse_mode: "Markdown" });
+  });
+
+  // Legacy callback alias
   bot.callbackQuery("access:invite", async (ctx) => {
     await ctx.answerCallbackQuery();
     ctx.session.pendingAction = "access:code";
-    await ctx.reply(
-      `🎟️ *INVITE CODE*\n━━━━━━━━━━━━━━━━━━\n\nSend your invite code:`,
-      { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("❌ Cancel", "menu:main") }
-    );
+    await ctx.reply(`🎟️ *ENTER CODE*\n\nSend your invite code:`, { parse_mode: "Markdown" });
   });
 
+  // ── Owner: Approve one user ────────────────────────────────────────────────
   bot.callbackQuery(/^access:approve:(\d+):(\w+)$/, async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
     const userId = parseInt(ctx.match[1]!);
     const tier = ctx.match[2]!;
-    await ctx.answerCallbackQuery(`✅ Approving...`);
-    try {
-      await db.insert(accessTable).values({
-        userId, tier, isApproved: true, isPending: false, approvedAt: new Date(), approvedBy: ctx.from.id,
-      }).onConflictDoUpdate({
-        target: accessTable.userId,
-        set: { tier, isApproved: true, isPending: false, approvedAt: new Date(), approvedBy: ctx.from.id },
-      });
+    await ctx.answerCallbackQuery(`${TIER_EMOJI[tier] ?? "✅"} Approving...`);
 
-      const emoji = TIER_EMOJI[tier] ?? "✅";
-      const label = TIER_LABEL[tier] ?? tier;
-      await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() }).catch(() => {});
-      await ctx.reply(`${emoji} Approved \`${userId}\` as *${label}*.`, { parse_mode: "Markdown" });
-      await bot.api.sendMessage(userId,
-        `${emoji} *Access Approved!*\n━━━━━━━━━━━━━━━━━━\n\nYour request has been approved!\n\nTier: *${label}*\n\n_Welcome aboard!_`,
-        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("⚡ Open Bot Panel", "menu:main") }
-      ).catch(() => {});
-    } catch (err) { await ctx.reply(`❌ ${err instanceof Error ? err.message : "Error"}`); }
+    const [rec] = await db.select().from(accessTable).where(eq(accessTable.userId, userId)).catch(() => [null]);
+    const displayName = s(rec?.firstName ?? String(userId));
+
+    await approveUser(bot, null, userId, tier, displayName, rec?.username);
+
+    await ctx.editMessageText(
+      `${TIER_EMOJI[tier] ?? "✅"} *Approved*\n\n👤 ${displayName}\n🆔 \`${userId}\`\nTier: *${TIER_LABEL[tier] ?? tier}*`,
+      { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("👥 View All", "acl:users:all") }
+    ).catch(() => ctx.reply(`✅ Approved \`${userId}\` as ${tier}.`));
   });
 
+  // ── Owner: Decline one user ────────────────────────────────────────────────
   bot.callbackQuery(/^access:deny:(\d+)$/, async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
     const userId = parseInt(ctx.match[1]!);
-    await ctx.answerCallbackQuery("🚫 Denied");
+    await ctx.answerCallbackQuery("🚫 Declined");
+
+    await db.insert(accessTable)
+      .values({ userId, tier: "free", isApproved: false, isPending: false })
+      .onConflictDoUpdate({ target: accessTable.userId, set: { isPending: false } })
+      .catch(() => {});
+
+    await ctx.editMessageText(
+      `🚫 *Request Declined*\n\n🆔 \`${userId}\``,
+      { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("⏳ View Pending", "acl:users:pending") }
+    ).catch(() => {});
+
+    await bot.api.sendMessage(userId,
+      `🚫 *Access Declined*\n\nYour request was not approved at this time.`,
+      { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🔑 Try Again", "access:request") }
+    ).catch(() => {});
+  });
+
+  // ── Owner: Approve ALL pending users ──────────────────────────────────────
+  bot.callbackQuery("acl:approve_all", async (ctx) => {
+    if (!isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
+    await ctx.answerCallbackQuery("✅ Approving all...");
+
     try {
-      await db.insert(accessTable).values({ userId, tier: "free", isApproved: false, isPending: false })
-        .onConflictDoUpdate({ target: accessTable.userId, set: { isPending: false } });
-      await ctx.editMessageReplyMarkup({ reply_markup: new InlineKeyboard() }).catch(() => {});
-      await ctx.reply(`🚫 Request from \`${userId}\` denied.`, { parse_mode: "Markdown" });
-      await bot.api.sendMessage(userId,
-        `🚫 *Access Denied*\n━━━━━━━━━━━━━━━━━━\n\nYour request was not approved at this time.\n\n_You may reapply later._`,
-        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🔑 Try Again", "access:request") }
-      ).catch(() => {});
-    } catch (err) { await ctx.reply(`❌ ${err instanceof Error ? err.message : "Error"}`); }
+      const pending = await db.select().from(accessTable).where(eq(accessTable.isPending, true));
+      if (pending.length === 0) {
+        await ctx.reply("⏳ No pending requests.");
+        return;
+      }
+      let approved = 0;
+      for (const rec of pending) {
+        await approveUser(bot, null, rec.userId, "free", s(rec.firstName ?? String(rec.userId)), rec.username);
+        approved++;
+        await new Promise((r) => setTimeout(r, 300)); // rate limit
+      }
+      await ctx.reply(`✅ Approved *${approved}* pending users as Free.`, { parse_mode: "Markdown" });
+    } catch (err) {
+      await ctx.reply(`❌ ${err instanceof Error ? err.message : "Error"}`);
+    }
   });
 
-  bot.callbackQuery(/^acl:upgrade:(\d+):(\w+)$/, async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
-    const userId = parseInt(ctx.match[1]!);
-    const tier = ctx.match[2]!;
-    await db.update(accessTable).set({ tier }).where(eq(accessTable.userId, userId));
-    await ctx.answerCallbackQuery(`${TIER_EMOJI[tier]} Upgraded`);
-    await ctx.reply(`${TIER_EMOJI[tier]} \`${userId}\` → *${TIER_LABEL[tier] ?? tier}*.`, { parse_mode: "Markdown" });
-    await bot.api.sendMessage(userId, `${TIER_EMOJI[tier]} *Tier Upgraded!*\n\nYou've been upgraded to *${TIER_LABEL[tier] ?? tier}*!`, { parse_mode: "Markdown" }).catch(() => {});
+  // ── Owner: Decline ALL pending users ──────────────────────────────────────
+  bot.callbackQuery("acl:decline_all", async (ctx) => {
+    if (!isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
+    await ctx.answerCallbackQuery("🚫 Declining all...");
+
+    try {
+      const pending = await db.select().from(accessTable).where(eq(accessTable.isPending, true));
+      if (pending.length === 0) { await ctx.reply("⏳ No pending requests."); return; }
+
+      await db.update(accessTable).set({ isPending: false }).where(eq(accessTable.isPending, true));
+
+      for (const rec of pending) {
+        await bot.api.sendMessage(rec.userId,
+          `🚫 *Access Declined*\n\nYour request was not approved.`,
+          { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🔑 Try Again", "access:request") }
+        ).catch(() => {});
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      await ctx.reply(`🚫 Declined *${pending.length}* pending requests.`, { parse_mode: "Markdown" });
+    } catch (err) {
+      await ctx.reply(`❌ ${err instanceof Error ? err.message : "Error"}`);
+    }
   });
 
-  bot.callbackQuery(/^acl:block:(\d+)$/, async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
-    const userId = parseInt(ctx.match[1]!);
-    await db.update(accessTable).set({ tier: "blocked", isApproved: false, blockedAt: new Date() }).where(eq(accessTable.userId, userId));
-    await ctx.answerCallbackQuery("🚫 Blocked");
-    await ctx.reply(`🚫 \`${userId}\` blocked.`, { parse_mode: "Markdown" });
-  });
-
+  // ── Owner: hex:access panel ────────────────────────────────────────────────
   bot.callbackQuery("hex:access", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
     await ctx.answerCallbackQuery();
     try {
       const all = await db.select().from(accessTable);
-      const p = all.filter((a) => a.isPending).length;
-      const a = all.filter((a) => a.isApproved).length;
-      const b = all.filter((a) => a.tier === "blocked").length;
+      const pending = all.filter((a) => a.isPending);
+      const approved = all.filter((a) => a.isApproved);
+      const blocked = all.filter((a) => a.tier === "blocked");
+
       await ctx.editMessageText(
-        `🔐 *ACCESS CONTROL*\n━━━━━━━━━━━━━━━━━━\n\n👥 Total: *${all.length}* · ✅ *${a}* · ⏳ *${p}* · 🚫 *${b}*`,
-        { parse_mode: "Markdown", reply_markup: accessPanelKeyboard() }
+        `🔐 *ACCESS CONTROL*\n━━━━━━━━━━━━━━━━━━\n\n` +
+        `👥 Total: *${all.length}*\n` +
+        `✅ Approved: *${approved.length}*\n` +
+        `⏳ Pending: *${pending.length}*\n` +
+        `🚫 Blocked: *${blocked.length}*`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: new InlineKeyboard()
+            .text("👥 All Users", "acl:users:all").text("⏳ Pending", "acl:users:pending").row()
+            .text("💎 Premium", "acl:users:premium").text("👑 VIP", "acl:users:vip").row()
+            .text("🚫 Blocked", "acl:users:blocked").text("🎟️ Invite Codes", "acl:invites").row()
+            .text("✅ Approve All Pending", "acl:approve_all").row()
+            .text("🚫 Decline All Pending", "acl:decline_all").row()
+            .text("➕ Generate Invite", "acl:invite:generate").row()
+            .text("🔙 Hex Panel", "hex:main"),
+        }
       );
     } catch (err) { await ctx.reply(`❌ ${err instanceof Error ? err.message : "Error"}`); }
   });
 
+  // ── Owner: view users by filter ────────────────────────────────────────────
   bot.callbackQuery(/^acl:users:(.+)$/, async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
     await ctx.answerCallbackQuery();
     try {
       const filter = ctx.match[1]!;
@@ -438,96 +486,146 @@ export function registerAccessHandlers(bot: MyBot): void {
         premium: "PREMIUM USERS", vip: "VIP USERS", blocked: "BLOCKED USERS",
       };
 
-      const lines = filtered.length === 0 ? "_None._"
-        : filtered.map((a) =>
-          `${TIER_EMOJI[a.tier] ?? "⚪"} *${esc(a.firstName ?? "Unknown")}*${a.username ? ` @${esc(a.username)}` : ""} \`${a.userId}\`\n` +
-          `   ${a.isPending ? "⏳ Pending" : a.isApproved ? "✅ Approved" : "❌ Not approved"} · ${a.tier}\n` +
-          `   Last seen: ${a.lastSeenAt ? new Date(a.lastSeenAt).toDateString() : "Never"}`
-        ).join("\n\n");
+      const lines = filtered.length === 0 ? "_No users found._"
+        : filtered.map((a) => {
+            const name = s(a.firstName ?? "Unknown");
+            const user = a.username ? ` @${s(a.username)}` : "";
+            const status = a.isPending ? "⏳ Pending" : a.isApproved ? "✅ Active" : "❌ Inactive";
+            return `${TIER_EMOJI[a.tier] ?? "⚪"} ${name}${user} \`${a.userId}\`\n   ${status} · ${a.tier}`;
+          }).join("\n\n");
+
+      const kb = new InlineKeyboard();
+      if (filter === "pending" && filtered.length > 0) {
+        kb.text("✅ Approve All", "acl:approve_all").text("🚫 Decline All", "acl:decline_all").row();
+        // One-by-one approve buttons for first 5
+        for (const u of filtered.slice(0, 5)) {
+          const name = s(u.firstName ?? String(u.userId)).slice(0, 15);
+          kb.text(`✅ ${name}`, `access:approve:${u.userId}:free`)
+            .text(`🚫`, `access:deny:${u.userId}`).row();
+        }
+      }
+      kb.text("🔙 Back", "hex:access");
 
       await ctx.editMessageText(
         `🔐 *${titles[filter] ?? filter.toUpperCase()}*\n━━━━━━━━━━━━━━━━━━\n\n${lines}`,
-        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🔙 Back", "hex:access") }
+        { parse_mode: "Markdown", reply_markup: kb }
       );
     } catch (err) { await ctx.reply(`❌ ${err instanceof Error ? err.message : "Error"}`); }
   });
 
+  // ── Owner: view invite codes ───────────────────────────────────────────────
   bot.callbackQuery("acl:invites", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
     await ctx.answerCallbackQuery();
     try {
-      const codes = await db.select().from(inviteCodesTable).orderBy(desc(inviteCodesTable.createdAt)).limit(15);
+      const codes = await db.select().from(inviteCodesTable)
+        .orderBy(desc(inviteCodesTable.createdAt)).limit(15);
+
       const lines = codes.length === 0 ? "_No codes yet._"
-        : codes.map((c) =>
-          `${c.isActive ? "🟢" : "🔴"} \`${c.code}\` — ${TIER_EMOJI[c.tier] ?? ""} ${c.tier} · ${c.usedCount}/${c.maxUses} uses${c.note ? ` · _${c.note}_` : ""}`
-        ).join("\n");
+        : codes.map((c) => {
+            // Sanitise note field — this was causing the parse error
+            const note = c.note ? ` - ${s(c.note)}` : "";
+            const status = c.isActive ? "🟢" : "🔴";
+            const tier = TIER_EMOJI[c.tier] ?? "";
+            return `${status} \`${c.code}\` ${tier} ${c.tier} - ${c.usedCount}/${c.maxUses} uses${note}`;
+          }).join("\n");
+
       await ctx.editMessageText(
-        `🎟️ *INVITE CODES*\n━━━━━━━━━━━━━━━━━━\n\n${lines}`,
-        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("➕ Generate", "acl:invite:generate").row().text("🔙 Back", "hex:access") }
+        `🎟️ INVITE CODES\n━━━━━━━━━━━━━━━━━━\n\n${lines}`,
+        {
+          reply_markup: new InlineKeyboard()
+            .text("➕ Generate New", "acl:invite:generate").row()
+            .text("🔙 Back", "hex:access"),
+        }
       );
-    } catch (err) { await ctx.reply(`❌ ${err instanceof Error ? err.message : "Error"}`); }
+    } catch (err) {
+      logger.error({ err }, "acl:invites error");
+      await ctx.reply(`❌ ${err instanceof Error ? err.message : "Error"}`);
+    }
   });
 
+  // ── Owner: generate invite code prompt ────────────────────────────────────
   bot.callbackQuery("acl:invite:generate", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
     ctx.session.pendingAction = "acl:generate_invite";
     await ctx.answerCallbackQuery();
     await ctx.reply(
-      `🎟️ *GENERATE INVITE CODE*\n━━━━━━━━━━━━━━━━━━\n\nSend in format:\n\`TIER USES NOTE\`\n\nExamples:\n\`premium 1 For @username\`\n\`vip 3 Bulk access\`\n\`free 10 Open invite\`\n\n_Tiers: free · premium · vip_`,
-      { parse_mode: "Markdown" }
+      `🎟️ GENERATE INVITE CODE\n━━━━━━━━━━━━━━━━━━\n\nSend in format:\nTIER USES NOTE\n\nExamples:\npremium 1 For username\nvip 3 Bulk access\nfree 10 Open invite\n\nTiers: free - premium - vip`,
+    );
+  });
+
+  // ── Owner: upgrade user ────────────────────────────────────────────────────
+  bot.callbackQuery(/^acl:upgrade:(\d+):(\w+)$/, async (ctx) => {
+    if (!isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
+    const userId = parseInt(ctx.match[1]!); const tier = ctx.match[2]!;
+    await db.update(accessTable).set({ tier }).where(eq(accessTable.userId, userId));
+    await ctx.answerCallbackQuery(`${TIER_EMOJI[tier] ?? ""} Upgraded`);
+    await bot.api.sendMessage(userId, `${TIER_EMOJI[tier] ?? ""} Your tier has been upgraded to ${TIER_LABEL[tier] ?? tier}!`).catch(() => {});
+  });
+
+  // ── Owner: block user ──────────────────────────────────────────────────────
+  bot.callbackQuery(/^acl:block:(\d+)$/, async (ctx) => {
+    if (!isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
+    const userId = parseInt(ctx.match[1]!);
+    await db.update(accessTable).set({ tier: "blocked", isApproved: false, blockedAt: new Date() }).where(eq(accessTable.userId, userId));
+    await ctx.answerCallbackQuery("🚫 Blocked");
+    await ctx.reply(`🚫 User \`${userId}\` has been blocked.`, { parse_mode: "Markdown" });
+  });
+
+  // ── Owner commands ─────────────────────────────────────────────────────────
+  bot.command("access", async (ctx) => {
+    if (!isOwner(ctx.from!.id)) { await ctx.reply("⛔ Owner only."); return; }
+    const all = await db.select().from(accessTable).catch(() => []);
+    const pending = all.filter((a) => a.isPending);
+    await ctx.reply(
+      `🔐 ACCESS CONTROL\n━━━━━━━━━━━━━━━━━━\n\n` +
+      `Total: ${all.length} - Approved: ${all.filter((a) => a.isApproved).length}\n` +
+      `Pending: ${pending.length} - Blocked: ${all.filter((a) => a.tier === "blocked").length}`,
+      {
+        reply_markup: new InlineKeyboard()
+          .text("👥 All Users", "acl:users:all").text("⏳ Pending", "acl:users:pending").row()
+          .text("✅ Approve All", "acl:approve_all").text("🚫 Decline All", "acl:decline_all").row()
+          .text("🎟️ Invite Codes", "acl:invites").text("➕ Generate", "acl:invite:generate"),
+      }
     );
   });
 
   bot.command("approve", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) return;
+    if (!isOwner(ctx.from!.id)) return;
     const parts = ctx.match?.trim().split(/\s+/) ?? [];
-    const userId = parseInt(parts[0] ?? "");
-    const tier = parts[1] ?? "free";
+    const userId = parseInt(parts[0] ?? ""); const tier = parts[1] ?? "free";
     if (isNaN(userId)) { await ctx.reply("Usage: /approve <userId> [free|premium|vip]"); return; }
-    await db.insert(accessTable).values({ userId, tier, isApproved: true, isPending: false, approvedAt: new Date(), approvedBy: ctx.from.id })
-      .onConflictDoUpdate({ target: accessTable.userId, set: { tier, isApproved: true, isPending: false, approvedAt: new Date() } });
-    await ctx.reply(`✅ \`${userId}\` approved as *${TIER_LABEL[tier] ?? tier}*.`, { parse_mode: "Markdown" });
-    await bot.api.sendMessage(userId, `✅ *Access Approved!*\n\nYou've been granted *${TIER_LABEL[tier] ?? tier}* access.`,
-      { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("⚡ Open Bot Panel", "menu:main") }
-    ).catch(() => {});
+    const [rec] = await db.select().from(accessTable).where(eq(accessTable.userId, userId)).catch(() => [null]);
+    await approveUser(bot, ctx, userId, tier, s(rec?.firstName ?? String(userId)), rec?.username);
+    await ctx.reply(`✅ Approved ${userId} as ${tier}.`);
   });
 
   bot.command("revoke", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) return;
+    if (!isOwner(ctx.from!.id)) return;
     const userId = parseInt(ctx.match?.trim() ?? "");
     if (isNaN(userId)) { await ctx.reply("Usage: /revoke <userId>"); return; }
-    await db.update(accessTable).set({ isApproved: false, isPending: false }).where(eq(accessTable.userId, userId));
-    await ctx.reply(`🚫 Access revoked for \`${userId}\`.`, { parse_mode: "Markdown" });
+    await db.update(accessTable).set({ isApproved: false }).where(eq(accessTable.userId, userId));
+    await ctx.reply(`🚫 Access revoked for ${userId}.`);
   });
 
   bot.command("block", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) return;
+    if (!isOwner(ctx.from!.id)) return;
     const parts = ctx.match?.trim().split(/\s+/) ?? [];
     const userId = parseInt(parts[0] ?? "");
     const reason = parts.slice(1).join(" ") || undefined;
     if (isNaN(userId)) { await ctx.reply("Usage: /block <userId> [reason]"); return; }
-    await db.update(accessTable).set({ tier: "blocked", isApproved: false, blockedAt: new Date(), blockedReason: reason ?? null }).where(eq(accessTable.userId, userId));
-    await ctx.reply(`🚫 \`${userId}\` blocked.${reason ? `\nReason: ${reason}` : ""}`, { parse_mode: "Markdown" });
+    await db.update(accessTable)
+      .set({ tier: "blocked", isApproved: false, blockedAt: new Date(), blockedReason: reason ?? null })
+      .where(eq(accessTable.userId, userId));
+    await ctx.reply(`🚫 ${userId} blocked.${reason ? ` Reason: ${reason}` : ""}`);
   });
 }
 
-// ── Input processor ───────────────────────────────────────────────────────────
+// ── Input processor (called from menu.ts) ─────────────────────────────────────
 
 export async function processAccessInput(bot: MyBot, ctx: BotContext, action: string, text: string): Promise<void> {
-  const userId = ctx.from!.id;
-  const name = ctx.from!.first_name ?? "User";
-
-  if (action === "access:message") {
-    try {
-      await notifyOwner(bot, userId, name, ctx.from!.username, text);
-      await ctx.reply(
-        `✅ *Request Sent*\n━━━━━━━━━━━━━━━━━━\n\nYour request has been sent to the owner.\n\n🔑 *Enter the 6-digit code* the owner provides within 1 minute to gain access.`,
-        { parse_mode: "Markdown" }
-      );
-    } catch (err) {
-      logger.error({ err }, "processAccessInput error");
-      await ctx.reply(`❌ Failed to submit: ${err instanceof Error ? err.message : "Unknown error"}`);
-    }
+  if (action === "access:verify_otp") {
+    await verifyOTP(bot, ctx, text);
 
   } else if (action === "access:code") {
     await handleInviteCode(bot, ctx, text.trim());
@@ -539,23 +637,32 @@ export async function processAccessInput(bot: MyBot, ctx: BotContext, action: st
     const note = parts.slice(2).join(" ") || undefined;
 
     if (!["free", "premium", "vip"].includes(tier)) {
-      await ctx.reply("❌ Invalid tier. Use: `free` · `premium` · `vip`", { parse_mode: "Markdown" });
+      await ctx.reply("❌ Invalid tier. Use: free - premium - vip");
       return;
     }
-
-    const code = Array.from({ length: 8 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 32)]).join("");
-    const uses = isNaN(maxUses) ? 1 : maxUses;
+    const code = generateCode(8);
+    const uses = isNaN(maxUses) ? 1 : Math.max(1, maxUses);
 
     try {
-      await db.insert(inviteCodesTable).values({ code, tier, maxUses: uses, createdBy: userId, note: note ?? null, isActive: true });
+      await db.insert(inviteCodesTable).values({
+        code, tier, maxUses: uses,
+        createdBy: ctx.from!.id,
+        note: note ?? null,
+        isActive: true,
+      });
+
+      const botUsername = process.env.BOT_USERNAME ?? "crescent07_bot";
       await ctx.reply(
-        `🎟️ *INVITE CODE CREATED*\n━━━━━━━━━━━━━━━━━━\n\n` +
-        `Code: \`${code}\`\n${TIER_EMOJI[tier] ?? ""} Tier: *${TIER_LABEL[tier] ?? tier}*\nMax uses: *${uses}*${note ? `\nNote: ${note}` : ""}\n\n` +
-        `📎 Share link:\n\`t.me/${process.env.BOT_USERNAME ?? "crescent07_bot"}?start=${code}\``,
-        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🎟️ View Codes", "acl:invites") }
+        `🎟️ INVITE CODE CREATED\n━━━━━━━━━━━━━━━━━━\n\n` +
+        `Code: ${code}\n` +
+        `Tier: ${TIER_LABEL[tier] ?? tier}\n` +
+        `Max uses: ${uses}\n` +
+        (note ? `Note: ${note}\n` : "") +
+        `\nShare link:\nt.me/${botUsername}?start=${code}`,
+        { reply_markup: new InlineKeyboard().text("🎟️ View Codes", "acl:invites") }
       );
     } catch (err) {
-      await ctx.reply(`❌ Failed to create code: ${err instanceof Error ? err.message : "Unknown"}`);
+      await ctx.reply(`❌ Failed: ${err instanceof Error ? err.message : "Unknown"}`);
     }
   }
 }
