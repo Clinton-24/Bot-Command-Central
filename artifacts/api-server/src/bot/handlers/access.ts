@@ -352,13 +352,7 @@ Approve or decline:`,
 
     // Confirm to user
     await ctx.reply(
-      "✅ Request Sent!
-━━━━━━━━━━━━━━━━━━
-
-Your request has been sent to the owner.
-You will be notified once approved.
-
-If you have an invite code:",
+      "✅ Request Sent!\n━━━━━━━━━━━━━━━━━━\n\nYour request has been sent to the owner.\nYou will be notified once approved.\n\nIf you have an invite code:",
       { reply_markup: new InlineKeyboard().text("🎟️ Enter Code", "access:enter_code") }
     );
   });
