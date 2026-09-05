@@ -309,40 +309,58 @@ export function registerAccessHandlers(bot: MyBot): void {
     await ctx.answerCallbackQuery();
     const userId = ctx.from.id;
     const name = ctx.from.first_name ?? "User";
+    const username = ctx.from.username;
 
-    // Mark as pending in DB
-    try {
-      await db.insert(accessTable).values({
-        userId,
-        username: ctx.from.username,
-        firstName: name,
-        tier: "free",
-        isApproved: false,
-        isPending: true,
-        requestMessage: `Requested access at ${new Date().toISOString()}`,
-      }).onConflictDoUpdate({
-        target: accessTable.userId,
-        set: { isPending: true, username: ctx.from.username, firstName: name },
-      });
-    } catch (err) {
-      logger.error({ err }, "access:request DB error");
+    // Save to DB (non-blocking — notification fires regardless)
+    db.insert(accessTable).values({
+      userId,
+      username,
+      firstName: name,
+      tier: "free",
+      isApproved: false,
+      isPending: true,
+      requestMessage: `Requested at ${new Date().toISOString()}`,
+    }).onConflictDoUpdate({
+      target: accessTable.userId,
+      set: { isPending: true, username, firstName: name },
+    }).catch((err) => logger.error({ err }, "access:request DB insert failed"));
+
+    // Always notify owner with approve/decline buttons
+    const ownerIdStr = process.env["BOT_OWNER_ID"];
+    if (ownerIdStr) {
+      const displayName = s(name);
+      const displayUser = username ? ` (@${s(username)})` : "";
+      bot.api.sendMessage(
+        parseInt(ownerIdStr),
+        `🔔 ACCESS REQUEST
+━━━━━━━━━━━━━━━━━━
+
+👤 ${displayName}${displayUser}
+🆔 ${userId}
+
+Approve or decline:`,
+        {
+          reply_markup: new InlineKeyboard()
+            .text("✅ Approve Free", `access:approve:${userId}:free`)
+            .text("💎 Premium", `access:approve:${userId}:premium`)
+            .row()
+            .text("👑 VIP", `access:approve:${userId}:vip`)
+            .text("🚫 Decline", `access:deny:${userId}`),
+        }
+      ).catch((err) => logger.error({ err }, "owner notify failed"));
     }
 
-    // Notify owner — surface any errors
-    try {
-      await notifyOwner(bot, userId, name, ctx.from.username);
-      await ctx.reply(
-        `✅ *Request Sent!*\n━━━━━━━━━━━━━━━━━━\n\nYour request has been sent to the owner.\n\n_You will be notified once approved._\n\nAlternatively, if you have an invite code:`,
-        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🎟️ Enter Code", "access:enter_code") }
-      );
-    } catch (notifyErr) {
-      logger.error({ notifyErr }, "Failed to notify owner of access request");
-      // Tell user it went through but warn owner config may be missing
-      await ctx.reply(
-        `✅ *Request Submitted*\n━━━━━━━━━━━━━━━━━━\n\nYour request has been logged.\n\n_Contact the admin directly if you don\'t hear back._`,
-        { parse_mode: "Markdown" }
-      );
-    }
+    // Confirm to user
+    await ctx.reply(
+      "✅ Request Sent!
+━━━━━━━━━━━━━━━━━━
+
+Your request has been sent to the owner.
+You will be notified once approved.
+
+If you have an invite code:",
+      { reply_markup: new InlineKeyboard().text("🎟️ Enter Code", "access:enter_code") }
+    );
   });
 
   // ── User: Enter code button ────────────────────────────────────────────────
