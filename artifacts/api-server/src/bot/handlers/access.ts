@@ -172,7 +172,7 @@ async function notifyOwner(bot: MyBot, userId: number, name: string, username: s
         .text("👑 VIP", `access:approve:${userId}:vip`)
         .text("🚫 Decline", `access:deny:${userId}`),
     }
-  ).catch((err) => logger.error({ err }, "notifyOwner failed"));
+  ); // let errors propagate so caller can handle
 }
 
 // ── OTP verification ──────────────────────────────────────────────────────────
@@ -328,13 +328,21 @@ export function registerAccessHandlers(bot: MyBot): void {
       logger.error({ err }, "access:request DB error");
     }
 
-    // Notify owner
-    await notifyOwner(bot, userId, name, ctx.from.username);
-
-    await ctx.reply(
-      `✅ *Request Sent!*\n━━━━━━━━━━━━━━━━━━\n\nYour request has been sent to the owner.\n\n_You will be notified once approved._\n\nAlternatively, if you have an invite code:`,
-      { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🎟️ Enter Code", "access:enter_code") }
-    );
+    // Notify owner — surface any errors
+    try {
+      await notifyOwner(bot, userId, name, ctx.from.username);
+      await ctx.reply(
+        `✅ *Request Sent!*\n━━━━━━━━━━━━━━━━━━\n\nYour request has been sent to the owner.\n\n_You will be notified once approved._\n\nAlternatively, if you have an invite code:`,
+        { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🎟️ Enter Code", "access:enter_code") }
+      );
+    } catch (notifyErr) {
+      logger.error({ notifyErr }, "Failed to notify owner of access request");
+      // Tell user it went through but warn owner config may be missing
+      await ctx.reply(
+        `✅ *Request Submitted*\n━━━━━━━━━━━━━━━━━━\n\nYour request has been logged.\n\n_Contact the admin directly if you don\'t hear back._`,
+        { parse_mode: "Markdown" }
+      );
+    }
   });
 
   // ── User: Enter code button ────────────────────────────────────────────────
@@ -588,6 +596,31 @@ export function registerAccessHandlers(bot: MyBot): void {
           .text("🎟️ Invite Codes", "acl:invites").text("➕ Generate", "acl:invite:generate"),
       }
     );
+  });
+
+  // ── Debug: test owner notification ───────────────────────────────────────
+  bot.command("testnotify", async (ctx) => {
+    if (!isOwner(ctx.from!.id)) return;
+    const ownerIdStr = process.env["BOT_OWNER_ID"];
+    await ctx.reply(
+      `🔧 Debug:
+BOT_OWNER_ID = \`${ownerIdStr ?? "NOT SET"}\`
+Your ID = \`${ctx.from!.id}\`
+Match = ${String(ctx.from!.id) === ownerIdStr}`,
+      { parse_mode: "Markdown" }
+    );
+    try {
+      await bot.api.sendMessage(
+        parseInt(ownerIdStr ?? "0"),
+        `🔔 TEST NOTIFICATION
+
+This is a test from /testnotify
+If you see this, owner notifications work.`,
+      );
+      await ctx.reply("✅ Test notification sent to owner ID.");
+    } catch (err) {
+      await ctx.reply(`❌ Failed to send to owner: ${err instanceof Error ? err.message : "Unknown"}`);
+    }
   });
 
   bot.command("approve", async (ctx) => {
