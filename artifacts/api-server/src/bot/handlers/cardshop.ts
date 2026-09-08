@@ -10,6 +10,7 @@ import {
 import type { MyBot } from "../index";
 import type { BotContext } from "../context";
 import { logger } from "../../lib/logger";
+import { getProductPriceLimit, subscriptionPlansKeyboard } from "./access";
 import { createCryptoBotInvoice, CRYPTOBOT_ASSETS, type CryptoBotAsset } from "./cryptobot";
 
 // ── Constants ────────────────────────────────────────────────────────────────
@@ -163,21 +164,22 @@ export function registerCardShopCallbacks(bot: MyBot): void {
           : eq(productsTable.isActive, true)
       )
       .orderBy(productsTable.name);
+    const priceLimit = ctx.from ? await getProductPriceLimit(ctx.from.id) : null;
+    const visibleProducts = products.filter((product) => priceLimit !== null && parseFloat(product.price) <= priceLimit);
 
-    if (products.length === 0) {
+    if (visibleProducts.length === 0) {
       await ctx.editMessageText(
-        `🛍️ *CARDSHOP*\n━━━━━━━━━━━━━━━━━━\n\nNo products available in this category right now.`,
-        {
-          parse_mode: "Markdown",
-          reply_markup: new InlineKeyboard().text("🔙 Shop", "cardshop:main"),
-        }
+        priceLimit === null
+          ? "🔐 *Access required*\n\nUse a referral from an active bot user for Free access, or choose a paid plan."
+          : `🔐 No products in this category are available for your tier.\n\nYour tier allows products up to *$${priceLimit === Number.POSITIVE_INFINITY ? "any price" : priceLimit.toFixed(2)}*. Upgrade for broader access.`,
+        { parse_mode: "Markdown", reply_markup: subscriptionPlansKeyboard() }
       );
       return;
     }
 
     const catLabel = category ? `${catEmoji(category)} ${category.toUpperCase()}` : "🎭 ALL PRODUCTS";
     const kb = new InlineKeyboard();
-    for (const p of products) {
+    for (const p of visibleProducts) {
       kb.text(
         `${catEmoji(p.category)} ${p.name} — $${parseFloat(p.price).toFixed(2)}`,
         `cardshop:product:${p.id}`
@@ -186,7 +188,7 @@ export function registerCardShopCallbacks(bot: MyBot): void {
     kb.text("🔙 Shop", "cardshop:main");
 
     await ctx.editMessageText(
-      `🛍️ *${catLabel}*\n━━━━━━━━━━━━━━━━━━\n\n${products.length} product(s) available:`,
+      `🛍️ *${catLabel}*\n━━━━━━━━━━━━━━━━━━\n\n${visibleProducts.length} product(s) available:`,
       { parse_mode: "Markdown", reply_markup: kb }
     ).catch(() => {}); // ignore "message not modified" errors
   }
@@ -211,6 +213,15 @@ export function registerCardShopCallbacks(bot: MyBot): void {
       await ctx.editMessageText("❌ This product is no longer available.", {
         reply_markup: new InlineKeyboard().text("🛍️ Shop", "cardshop:main"),
       });
+      return;
+    }
+
+    const priceLimit = ctx.from ? await getProductPriceLimit(ctx.from.id) : null;
+    if (priceLimit === null || parseFloat(p.price) > priceLimit) {
+      await ctx.editMessageText(
+        "🔐 This product requires a higher access tier.\n\nChoose a paid plan to unlock more products.",
+        { parse_mode: "Markdown", reply_markup: subscriptionPlansKeyboard() }
+      );
       return;
     }
 
@@ -245,6 +256,12 @@ export function registerCardShopCallbacks(bot: MyBot): void {
       await ctx.editMessageText("❌ Product unavailable.", {
         reply_markup: new InlineKeyboard().text("🛍️ Shop", "cardshop:main"),
       });
+      return;
+    }
+
+    const priceLimit = await getProductPriceLimit(ctx.from!.id);
+    if (priceLimit === null || parseFloat(p.price) > priceLimit) {
+      await ctx.editMessageText("🔐 This product requires a higher access tier. Choose a paid plan to continue.", { reply_markup: subscriptionPlansKeyboard() });
       return;
     }
 

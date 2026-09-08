@@ -12,6 +12,7 @@ A full-featured Telegram bot with shop, card tools, social scraping, group moder
 - Required env: `DATABASE_URL` — Postgres connection string
 - Required secret: `TELEGRAM_BOT_TOKEN` — from @BotFather
 - Required secret: `BOT_OWNER_ID` — your Telegram user ID (for /broadcast, /stats)
+- Optional `PREMIUM_MONTHLY_PRICE` — Premium 30-day price in USD (defaults to 5); VIP is fixed at $10 for 30 days
 
 ## Stack
 

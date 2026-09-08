@@ -3,8 +3,6 @@ import { logger } from "./lib/logger";
 import { getBotInstance } from "./bot/index";
 import { registerBatteryWebhook } from "./bot/handlers/battery";
 import { webhookCallback } from "grammy";
-import cron from "node-cron";
-import { runExternalDbChecks } from "./bot/handlers/extdblogs";
 import { runMigrations } from "./lib/migrate";
 import { createCryptoBotRouter } from "./bot/handlers/cryptobot";
 
@@ -25,18 +23,6 @@ app.use("/api", createCryptoBotRouter(bot));
 app.get("/health", (_req, res) => {
   res.status(200).json({ status: "ok", uptime: process.uptime() });
 });
-
-// ── Cron jobs ─────────────────────────────────────────────────────────────────
-
-const ownerId = process.env.BOT_OWNER_ID ? Number(process.env.BOT_OWNER_ID) : NaN;
-
-if (!isNaN(ownerId)) {
-  // Harmony DB checks every 6 hours
-  cron.schedule("0 */6 * * *", () => runExternalDbChecks(bot, ownerId), { timezone: "Africa/Nairobi" });
-  logger.info("Harmony DB health checks scheduled every 6 hours");
-} else {
-  logger.warn("BOT_OWNER_ID not set — Harmony DB checks disabled");
-}
 
 // ── Keep-alive (prevents Render free tier from sleeping) ──────────────────────
 

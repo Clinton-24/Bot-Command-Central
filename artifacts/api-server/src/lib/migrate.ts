@@ -73,6 +73,25 @@ export async function runMigrations(): Promise<void> {
         ADD COLUMN IF NOT EXISTS invited_by BIGINT;
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS tier_subscriptions (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        tier TEXT NOT NULL,
+        amount NUMERIC(10, 2) NOT NULL,
+        coin TEXT NOT NULL,
+        address TEXT NOT NULL,
+        reference TEXT NOT NULL UNIQUE,
+        invoice_id INTEGER UNIQUE,
+        status TEXT NOT NULL DEFAULT 'pending',
+        claimed_at TIMESTAMP,
+        confirmed_at TIMESTAMP,
+        starts_at TIMESTAMP,
+        expires_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+    `);
+
     logger.info("Migrations complete ✅");
   } catch (err) {
     logger.error({ err }, "Migration failed ❌");

@@ -117,6 +117,10 @@ export function registerWelcomeHandler(bot: MyBot): void {
 
     // Handle invite code in /start payload
     const payload = ctx.match?.trim();
+    if (payload?.startsWith("tier_subscription_")) {
+      await sendMainMenu(ctx);
+      return;
+    }
     if (payload && payload.length > 0 && !isOwner(from.id)) {
       await handleInviteCode(bot, ctx, payload);
       return;
