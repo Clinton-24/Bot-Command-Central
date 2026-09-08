@@ -330,22 +330,26 @@ export function registerAccessHandlers(bot: MyBot): void {
     if (ownerIdStr) {
       const displayName = s(name);
       const displayUser = username ? ` (@${s(username)})` : "";
+      const ownerMsg = [
+        "🔔 ACCESS REQUEST",
+        "━━━━━━━━━━━━━━━━━━",
+        "",
+        "👤 " + displayName + displayUser,
+        "🆔 " + String(userId),
+        "",
+        "Approve or decline:",
+      ].join("\n");
+
       bot.api.sendMessage(
         parseInt(ownerIdStr),
-        `🔔 ACCESS REQUEST
-━━━━━━━━━━━━━━━━━━
-
-👤 ${displayName}${displayUser}
-🆔 ${userId}
-
-Approve or decline:`,
+        ownerMsg,
         {
           reply_markup: new InlineKeyboard()
-            .text("✅ Approve Free", `access:approve:${userId}:free`)
-            .text("💎 Premium", `access:approve:${userId}:premium`)
+            .text("✅ Approve Free", "access:approve:" + userId + ":free")
+            .text("💎 Premium", "access:approve:" + userId + ":premium")
             .row()
-            .text("👑 VIP", `access:approve:${userId}:vip`)
-            .text("🚫 Decline", `access:deny:${userId}`),
+            .text("👑 VIP", "access:approve:" + userId + ":vip")
+            .text("🚫 Decline", "access:deny:" + userId),
         }
       ).catch((err) => logger.error({ err }, "owner notify failed"));
     }
@@ -575,6 +579,30 @@ Approve or decline:`,
   });
 
   // ── Owner: upgrade user ────────────────────────────────────────────────────
+  bot.callbackQuery(/^acl:promote:(\d+)$/, async (ctx) => {
+    if (!isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
+    const userId = parseInt(ctx.match[1]!);
+    const [rec] = await db.select().from(accessTable).where(eq(accessTable.userId, userId)).catch(() => [null]);
+    if (!rec) { await ctx.answerCallbackQuery("❌ User not found"); return; }
+    const next = rec.tier === "free" ? "premium" : rec.tier === "premium" ? "vip" : null;
+    if (!next) { await ctx.answerCallbackQuery("Already VIP"); return; }
+    await db.update(accessTable).set({ tier: next }).where(eq(accessTable.userId, userId));
+    await ctx.answerCallbackQuery((TIER_EMOJI[next] ?? "") + " Promoted to " + TIER_LABEL[next]);
+    await bot.api.sendMessage(userId, (TIER_EMOJI[next] ?? "") + " You have been promoted to " + TIER_LABEL[next] + "!").catch(() => {});
+  });
+
+  bot.callbackQuery(/^acl:demote:(\d+)$/, async (ctx) => {
+    if (!isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
+    const userId = parseInt(ctx.match[1]!);
+    const [rec] = await db.select().from(accessTable).where(eq(accessTable.userId, userId)).catch(() => [null]);
+    if (!rec) { await ctx.answerCallbackQuery("❌ User not found"); return; }
+    const prev = rec.tier === "vip" ? "premium" : rec.tier === "premium" ? "free" : null;
+    if (!prev) { await ctx.answerCallbackQuery("Already Free"); return; }
+    await db.update(accessTable).set({ tier: prev }).where(eq(accessTable.userId, userId));
+    await ctx.answerCallbackQuery("⬇️ Demoted to " + TIER_LABEL[prev]);
+    await bot.api.sendMessage(userId, "⬇️ Your tier has been updated to " + TIER_LABEL[prev] + ".").catch(() => {});
+  });
+
   bot.callbackQuery(/^acl:upgrade:(\d+):(\w+)$/, async (ctx) => {
     if (!isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
     const userId = parseInt(ctx.match[1]!); const tier = ctx.match[2]!;
