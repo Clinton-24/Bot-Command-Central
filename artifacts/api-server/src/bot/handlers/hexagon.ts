@@ -52,12 +52,14 @@ const OPENROUTER_BASE = "https://openrouter.ai/api/v1";
 
 // OpenRouter free models — verified August 2026
 // openrouter/free auto-selects best available free model — most resilient option
+// Free models verified on OpenRouter — ordered by quality
+// If a model returns 404/400, it was delisted; the loop tries the next one
 const FREE_MODELS = [
-  "openrouter/free",                              // Auto-router — always works
-  "nvidia/nemotron-3-ultra-550b-a55b:free",       // 550B, 1M ctx — best quality
-  "nvidia/nemotron-3-nano-8b-v1:free",            // Fast, lightweight fallback
-  "google/gemma-3-27b-it:free",                   // Gemma 3 27B
-  "cohere/command-r-plus:free",                   // Cohere fallback
+  "google/gemini-2.0-flash-exp:free",
+  "nvidia/nemotron-3-ultra-550b-a55b:free",
+  "google/gemma-3-27b-it:free",
+  "microsoft/phi-4-reasoning-plus:free",
+  "meta-llama/llama-3.2-11b-vision-instruct:free",
 ];
 
 // ── Quota ─────────────────────────────────────────────────────────────────────
@@ -302,14 +304,25 @@ async function callOpenRouter(
       });
 
       if (res.status === 429 || res.status === 503) {
-        lastError = `${model}: rate-limited`;
-        logger.warn({ model }, "Rate-limited, trying next model...");
+        lastError = `${model}: rate-limited (${res.status})`;
+        logger.warn({ model, status: res.status }, "Rate-limited, trying next model");
+        continue;
+      }
+      if (res.status === 404) {
+        lastError = `${model}: model not found (404) — likely delisted`;
+        logger.warn({ model }, "Model 404 — delisted, trying next");
         continue;
       }
       if (!res.ok) {
-        const t = await res.text();
-        lastError = `${model}: HTTP ${res.status}`;
-        logger.warn({ model, status: res.status, t }, "Model error");
+        const t = await res.text().catch(() => "");
+        // HTML response = auth/firewall issue
+        if (t.trim().startsWith("<")) {
+          lastError = `${model}: API returned HTML — possible auth issue`;
+          logger.warn({ model, status: res.status }, "HTML response from OpenRouter");
+          continue;
+        }
+        lastError = `${model}: HTTP ${res.status} — ${t.slice(0, 80)}`;
+        logger.warn({ model, status: res.status }, "Model HTTP error");
         continue;
       }
 
@@ -317,7 +330,10 @@ async function callOpenRouter(
       if (data.error) { lastError = data.error.message; continue; }
 
       const reply = data.choices?.[0]?.message?.content?.trim() ?? "";
-      if (!reply) { lastError = "Empty response"; continue; }
+      if (!reply) { lastError = `${model}: empty response`; continue; }
+      // Reject garbled responses containing high density of <unk> tokens
+      const unkCount = (reply.match(/<unk>/g) ?? []).length;
+      if (unkCount > 5) { lastError = `${model}: garbled response (${unkCount} <unk> tokens)`; logger.warn({ model }, "Garbled response — trying next"); continue; }
 
       logger.info({ model }, "Crescent responded");
       return { reply, model };
@@ -326,11 +342,15 @@ async function callOpenRouter(
       logger.warn({ model }, "Model fetch failed");
     }
   }
-  // Give a clear actionable error
-  if (lastError.includes("HTML") || lastError.includes("API key")) {
-    throw new Error(`AgentRouter auth failed — verify OPENROUTER_API_KEY on Render is correct. Get key from: https://agentrouter.org/console/token`);
+  // All models failed — give a clear error with last known failure
+  if (!OPENROUTER_API_KEY || lastError.includes("401")) {
+    throw new Error(
+      "OpenRouter API key missing or invalid.\n" +
+      "Set OPENROUTER_API_KEY on Render → Environment.\n" +
+      "Get a key at openrouter.ai/keys"
+    );
   }
-  throw new Error(`All models failed. Last: ${lastError}`);
+  throw new Error(`All free models unavailable. Last error: ${lastError}\n\nCheck openrouter.ai/models for current free models.`);
 }
 
 // ── Agent action parser & executor ────────────────────────────────────────────

@@ -26,6 +26,46 @@ app.get("/health", (_req, res) => {
   res.status(200).json({ status: "ok", uptime: process.uptime() });
 });
 
+// Quick AI test endpoint — GET /test-ai to verify OpenRouter is working
+app.get("/test-ai", async (_req, res) => {
+  const key = process.env.OPENROUTER_API_KEY;
+  if (!key) {
+    return res.json({ ok: false, error: "OPENROUTER_API_KEY not set" });
+  }
+  const models = [
+    "google/gemini-2.0-flash-exp:free",
+    "nvidia/nemotron-3-ultra-550b-a55b:free",
+    "google/gemma-3-27b-it:free",
+  ];
+  const results: Record<string, string> = {};
+  for (const model of models) {
+    try {
+      const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${key}`,
+          "Content-Type": "application/json",
+          "HTTP-Referer": "https://bot-command-central-1.onrender.com",
+        },
+        body: JSON.stringify({
+          model,
+          max_tokens: 20,
+          messages: [{ role: "user", content: "Reply with just: OK" }],
+        }),
+      });
+      if (!r.ok) {
+        results[model] = `HTTP ${r.status}`;
+        continue;
+      }
+      const d = await r.json() as { choices?: Array<{ message?: { content?: string } }>; error?: { message: string } };
+      results[model] = d.error ? `error: ${d.error.message}` : (d.choices?.[0]?.message?.content ?? "empty") + " ✅";
+    } catch (err) {
+      results[model] = `exception: ${err instanceof Error ? err.message : "unknown"}`;
+    }
+  }
+  return res.json({ ok: true, key: key.slice(0, 12) + "...", results });
+});
+
 // ── Cron jobs ─────────────────────────────────────────────────────────────────
 
 const ownerId = process.env.BOT_OWNER_ID ? Number(process.env.BOT_OWNER_ID) : NaN;
