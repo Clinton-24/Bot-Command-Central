@@ -7,6 +7,7 @@
  */
 
 import { InlineKeyboard } from "grammy";
+import { md, safeName, safeUsername } from "../utils/escape";
 import { eq, desc } from "drizzle-orm";
 import { db, accessTable, inviteCodesTable } from "@workspace/db";
 import type { MyBot } from "../index";
@@ -83,7 +84,7 @@ export async function checkAccess(
       return false;
     }
     if (rec.tier === "blocked") {
-      await ctx.reply(`🚫 *Access Denied*\n\nYour account has been blocked.${rec.blockedReason ? `\n_Reason: ${s(rec.blockedReason)}_` : ""}`, { parse_mode: "Markdown" });
+      await ctx.reply(`🚫 *Access Denied*\n\nYour account has been blocked.${rec.blockedReason ? `\n_Reason: ${md(rec.blockedReason)}_` : ""}`, { parse_mode: "Markdown" });
       return false;
     }
     if (rec.expiresAt && rec.expiresAt < new Date()) {
@@ -129,7 +130,7 @@ export async function checkCrescentAccess(ctx: BotContext): Promise<boolean> {
 // ── Access gate ───────────────────────────────────────────────────────────────
 
 async function showGate(ctx: BotContext, expired = false): Promise<void> {
-  const name = s(ctx.from?.first_name ?? "User");
+  const name = md(ctx.from?.first_name ?? "User");
   const text = expired
     ? `⏰ *Access Expired*\n\nWelcome back, ${name}.\n\nYour access has expired. Request access again below.`
     : `🔐 *PRIVATE BOT*\n\nWelcome, ${name}.\n\nThis bot requires approval to use.\nTap below to request access:`;
@@ -154,8 +155,8 @@ async function notifyOwner(bot: MyBot, userId: number, name: string, username: s
   const ownerIdStr = process.env["BOT_OWNER_ID"];
   if (!ownerIdStr) { logger.warn("BOT_OWNER_ID not set"); return; }
 
-  const displayName = s(name);
-  const displayUser = username ? ` (@${s(username)})` : "";
+  const displayName = md(name);
+  const displayUser = username ? ` (@${md(username)})` : "";
 
   await bot.api.sendMessage(
     parseInt(ownerIdStr),
@@ -203,7 +204,7 @@ async function verifyOTP(bot: MyBot, ctx: BotContext, code: string): Promise<voi
   }
 
   pendingOTPs.delete(userId);
-  await approveUser(bot, ctx, userId, entry.tier, s(entry.name), entry.username);
+  await approveUser(bot, ctx, userId, entry.tier, md(entry.name), entry.username);
 }
 
 // ── Core approve function ─────────────────────────────────────────────────────
@@ -248,7 +249,7 @@ async function approveUser(
 
 export async function handleInviteCode(bot: MyBot, ctx: BotContext, code: string): Promise<void> {
   const userId = ctx.from!.id;
-  const name = s(ctx.from!.first_name ?? "User");
+  const name = md(ctx.from!.first_name ?? "User");
   const upper = code.trim().toUpperCase();
 
   // Check OTP first
@@ -290,7 +291,7 @@ export async function handleInviteCode(bot: MyBot, ctx: BotContext, code: string
     const ownerIdStr = process.env["BOT_OWNER_ID"];
     if (ownerIdStr) {
       await bot.api.sendMessage(parseInt(ownerIdStr),
-        `✅ *Invite Used*\n\n👤 ${name}${ctx.from!.username ? ` (@${s(ctx.from!.username)})` : ""}\n🎟️ Code: \`${upper}\`\n${emoji} ${label}`,
+        `✅ *Invite Used*\n\n👤 ${name}${ctx.from!.username ? ` (@${md(ctx.from!.username)})` : ""}\n🎟️ Code: \`${upper}\`\n${emoji} ${label}`,
         { parse_mode: "Markdown" }
       ).catch(() => {});
     }
@@ -307,29 +308,37 @@ export function registerAccessHandlers(bot: MyBot): void {
   // ── User: Request Access button ────────────────────────────────────────────
   bot.callbackQuery("access:request", async (ctx) => {
     await ctx.answerCallbackQuery();
+    // Ask for referral before processing — free tier requires an active referrer
+    ctx.session.pendingAction = "access:referral";
+    await ctx.reply(
+      "🔑 REQUEST ACCESS\n━━━━━━━━━━━━━━━━━━\n\n" +
+      "Free access requires a referral from an active user.\n\n" +
+      "Who referred you? Send their @username or Telegram ID.\n\n" +
+      "_If you have an invite code instead, tap below:_",
+      { reply_markup: new InlineKeyboard().text("🎟️ I Have a Code", "access:enter_code") }
+    );
+  });
+
+  // ── Process referral then notify owner ────────────────────────────────────
+  bot.callbackQuery("access:request_direct", async (ctx) => {
+    await ctx.answerCallbackQuery();
     const userId = ctx.from.id;
     const name = ctx.from.first_name ?? "User";
     const username = ctx.from.username;
 
-    // Save to DB (non-blocking — notification fires regardless)
     db.insert(accessTable).values({
-      userId,
-      username,
-      firstName: name,
-      tier: "free",
-      isApproved: false,
-      isPending: true,
-      requestMessage: `Requested at ${new Date().toISOString()}`,
+      userId, username, firstName: name,
+      tier: "free", isApproved: false, isPending: true,
+      requestMessage: "Direct request",
     }).onConflictDoUpdate({
       target: accessTable.userId,
       set: { isPending: true, username, firstName: name },
-    }).catch((err) => logger.error({ err }, "access:request DB insert failed"));
+    }).catch((err) => logger.error({ err }, "DB insert failed"));
 
-    // Always notify owner with approve/decline buttons
     const ownerIdStr = process.env["BOT_OWNER_ID"];
     if (ownerIdStr) {
-      const displayName = s(name);
-      const displayUser = username ? ` (@${s(username)})` : "";
+      const displayName = md(name);
+      const displayUser = username ? ` (@${md(username)})` : "";
       const ownerMsg = [
         "🔔 ACCESS REQUEST",
         "━━━━━━━━━━━━━━━━━━",
@@ -383,7 +392,7 @@ export function registerAccessHandlers(bot: MyBot): void {
     await ctx.answerCallbackQuery(`${TIER_EMOJI[tier] ?? "✅"} Approving...`);
 
     const [rec] = await db.select().from(accessTable).where(eq(accessTable.userId, userId)).catch(() => [null]);
-    const displayName = s(rec?.firstName ?? String(userId));
+    const displayName = md(rec?.firstName ?? String(userId));
 
     await approveUser(bot, null, userId, tier, displayName, rec?.username);
 
@@ -512,7 +521,7 @@ export function registerAccessHandlers(bot: MyBot): void {
 
       const lines = filtered.length === 0 ? "_No users found._"
         : filtered.map((a) => {
-            const name = s(a.firstName ?? "Unknown");
+            const name = md(a.firstName ?? "Unknown");
             const user = a.username ? ` @${s(a.username)}` : "";
             const status = a.isPending ? "⏳ Pending" : a.isApproved ? "✅ Active" : "❌ Inactive";
             return `${TIER_EMOJI[a.tier] ?? "⚪"} ${name}${user} \`${a.userId}\`\n   ${status} · ${a.tier}`;
@@ -523,7 +532,7 @@ export function registerAccessHandlers(bot: MyBot): void {
         kb.text("✅ Approve All", "acl:approve_all").text("🚫 Decline All", "acl:decline_all").row();
         // One-by-one approve buttons for first 5
         for (const u of filtered.slice(0, 5)) {
-          const name = s(u.firstName ?? String(u.userId)).slice(0, 15);
+          const name = md(u.firstName ?? String(u.userId)).slice(0, 15);
           kb.text(`✅ ${name}`, `access:approve:${u.userId}:free`)
             .text(`🚫`, `access:deny:${u.userId}`).row();
         }
@@ -548,7 +557,7 @@ export function registerAccessHandlers(bot: MyBot): void {
       const lines = codes.length === 0 ? "_No codes yet._"
         : codes.map((c) => {
             // Sanitise note field — this was causing the parse error
-            const note = c.note ? ` - ${s(c.note)}` : "";
+            const note = c.note ? ` - ${md(c.note)}` : "";
             const status = c.isActive ? "🟢" : "🔴";
             const tier = TIER_EMOJI[c.tier] ?? "";
             return `${status} \`${c.code}\` ${tier} ${c.tier} - ${c.usedCount}/${c.maxUses} uses${note}`;
@@ -669,7 +678,7 @@ If you see this, owner notifications work.`,
     const userId = parseInt(parts[0] ?? ""); const tier = parts[1] ?? "free";
     if (isNaN(userId)) { await ctx.reply("Usage: /approve <userId> [free|premium|vip]"); return; }
     const [rec] = await db.select().from(accessTable).where(eq(accessTable.userId, userId)).catch(() => [null]);
-    await approveUser(bot, ctx, userId, tier, s(rec?.firstName ?? String(userId)), rec?.username);
+    await approveUser(bot, ctx, userId, tier, md(rec?.firstName ?? String(userId)), rec?.username);
     await ctx.reply(`✅ Approved ${userId} as ${tier}.`);
   });
 
@@ -699,6 +708,90 @@ If you see this, owner notifications work.`,
 export async function processAccessInput(bot: MyBot, ctx: BotContext, action: string, text: string): Promise<void> {
   if (action === "access:verify_otp") {
     await verifyOTP(bot, ctx, text);
+
+  } else if (action === "access:referral") {
+    // Process referral check for free tier
+    const referralText = text.trim();
+    const userId = ctx.from!.id;
+    const name = ctx.from!.first_name ?? "User";
+    const username = ctx.from!.username;
+
+    // Look up referrer
+    let referrerId: number | null = null;
+    let referrerName = referralText;
+
+    try {
+      // Try by username
+      if (referralText.startsWith("@")) {
+        const uname = referralText.slice(1);
+        const [ref] = await db.select().from(accessTable).where(eq(accessTable.username, uname));
+        if (ref?.isApproved) { referrerId = ref.userId; referrerName = md(ref.firstName ?? uname); }
+      } else {
+        // Try by ID
+        const refId = parseInt(referralText);
+        if (!isNaN(refId)) {
+          const [ref] = await db.select().from(accessTable).where(eq(accessTable.userId, refId));
+          if (ref?.isApproved) { referrerId = ref.userId; referrerName = md(ref.firstName ?? String(refId)); }
+        }
+      }
+    } catch { /* ignore */ }
+
+    if (!referrerId) {
+      await ctx.reply(
+        "❌ That user was not found or is not an active member.\n\n" +
+        "Ask an active user to share their ID or username, then try again.\n\n" +
+        "Or upgrade directly:",
+        { reply_markup: new InlineKeyboard()
+          .text("💎 Get Premium ($10)", "sub:buy:premium")
+          .text("👑 Get VIP ($10)", "sub:buy:vip")
+          .row()
+          .text("🔙 Back", "menu:main") }
+      );
+      return;
+    }
+
+    // Valid referrer — save to DB and notify owner
+    await db.insert(accessTable).values({
+      userId, username, firstName: name,
+      tier: "free", isApproved: false, isPending: true,
+      requestMessage: "Referred by " + referralText,
+    }).onConflictDoUpdate({
+      target: accessTable.userId,
+      set: { isPending: true, requestMessage: "Referred by " + referralText, username, firstName: name },
+    }).catch((err) => logger.error({ err }, "referral DB insert failed"));
+
+    const ownerIdStr = process.env["BOT_OWNER_ID"];
+    if (ownerIdStr) {
+      bot.api.sendMessage(
+        parseInt(ownerIdStr),
+        [
+          "🔔 ACCESS REQUEST",
+          "━━━━━━━━━━━━━━━━━━",
+          "",
+          "👤 " + md(name) + safeUsername(username),
+          "🆔 " + userId,
+          "👥 Referred by: " + referrerName + " (" + referrerId + ")",
+          "",
+          "Approve or decline:",
+        ].join("\n"),
+        {
+          reply_markup: new InlineKeyboard()
+            .text("✅ Approve Free", "access:approve:" + userId + ":free")
+            .text("💎 Premium", "access:approve:" + userId + ":premium")
+            .row()
+            .text("👑 VIP", "access:approve:" + userId + ":vip")
+            .text("🚫 Decline", "access:deny:" + userId),
+        }
+      ).catch((err) => logger.error({ err }, "owner notify failed"));
+    }
+
+    await ctx.reply(
+      "✅ Request Sent!\n━━━━━━━━━━━━━━━━━━\n\n" +
+      "Your request has been sent to the owner.\n" +
+      "Referrer: " + referrerName + "\n\n" +
+      "You will be notified once approved.",
+      { reply_markup: new InlineKeyboard().text("🎟️ Enter Code", "access:enter_code") }
+    );
 
   } else if (action === "access:code") {
     await handleInviteCode(bot, ctx, text.trim());

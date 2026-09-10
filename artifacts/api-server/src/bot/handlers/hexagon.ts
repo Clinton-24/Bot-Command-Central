@@ -9,6 +9,7 @@
  */
 
 import { InlineKeyboard } from "grammy";
+import { md, safeName, safeUsername } from "../utils/escape";
 import { Pool } from "pg";
 import { eq, desc, gte, and, count } from "drizzle-orm";
 import {

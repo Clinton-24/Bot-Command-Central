@@ -175,6 +175,8 @@ export function registerMenuHandlers(bot: MyBot): void {
         await processBankLogInput(ctx, pending, text);
       } else if (pending.startsWith("access:") || pending.startsWith("acl:")) {
         await processAccessInput(bot, ctx, pending, text);
+      } else if (pending === "access:referral") {
+        await processAccessInput(bot, ctx, "access:referral", text);
       }
     } catch (err) {
       logger.error({ err }, "input interceptor error");

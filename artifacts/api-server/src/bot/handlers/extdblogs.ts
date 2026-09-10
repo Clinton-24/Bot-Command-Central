@@ -1,4 +1,5 @@
 import { InlineKeyboard } from "grammy";
+import { md, safeName, safeUsername } from "../utils/escape";
 import { Pool } from "pg";
 import { eq, desc } from "drizzle-orm";
 import { db, externalDbLogsTable } from "@workspace/db";
@@ -166,7 +167,7 @@ async function checkStorage(bot: MyBot, ownerId: number): Promise<void> {
       : `✅ *Harmony DB — Storage*\n━━━━━━━━━━━━━━━━━━\n\nToday, ${formatDate()} ${message}`;
 
     await insertLog({ site: SITE_NAME, checkType: "storage", status, message, storageUsedMb: usedMb, storageLimitMb: STORAGE_LIMIT_MB });
-    await notify(
+    if (isWarning || !opts?.silentOnSuccess) await notify(
       bot, ownerId, tgText,
       `${isWarning ? "⚠️" : "✅"} Harmony DB — Storage ${formatDate()}`,
       `Harmony DB storage check on ${formatDate()}.\n${message}`
@@ -212,7 +213,7 @@ async function checkIntegrity(bot: MyBot, ownerId: number): Promise<void> {
       : `Today, ${formatDate()} integrity check Failed... ${detail}`;
 
     await insertLog({ site: SITE_NAME, checkType: "integrity", status, message, details: detail });
-    await notify(
+    if (!ok || !opts?.silentOnSuccess) await notify(
       bot, ownerId,
       `${ok ? "✅" : "❌"} *Harmony DB — Integrity*\n━━━━━━━━━━━━━━━━━━\n\n${message}`,
       `${ok ? "✅" : "❌"} Harmony DB — Integrity ${formatDate()}`,
@@ -356,7 +357,7 @@ async function runAutomatedBackup(bot: MyBot, ownerId: number): Promise<void> {
 
 // ── Public: run all checks ────────────────────────────────────────────────────
 
-export async function runExternalDbChecks(bot: MyBot, notifyUserId: number): Promise<void> {
+export async function runExternalDbChecks(bot: MyBot, notifyUserId: number, opts?: { silentOnSuccess?: boolean }): Promise<void> {
   logger.info("Running Harmony DB health checks...");
   await checkConnection(bot, notifyUserId);
   await runAutomatedBackup(bot, notifyUserId);

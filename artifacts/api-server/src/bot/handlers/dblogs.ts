@@ -6,11 +6,13 @@
  */
 
 import { InlineKeyboard } from "grammy";
+import { md, safeName, safeUsername } from "../utils/escape";
 import { eq, desc, and } from "drizzle-orm";
 import { db, bankLogsTable } from "@workspace/db";
 import type { MyBot } from "../index";
 import type { BotContext } from "../context";
 import { isOwner } from "../helpers";
+import { canAccessFeature } from "./subscription";
 import { logger } from "../../lib/logger";
 
 // ── Keyboards ─────────────────────────────────────────────────────────────────
@@ -75,7 +77,17 @@ async function showMain(ctx: BotContext): Promise<void> {
 export function registerDbLogsCallbacks(bot: MyBot): void {
   // Main panel
   bot.callbackQuery("dblogs:main", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!ctx.from) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!isOwner(ctx.from.id)) {
+      const ok = await canAccessFeature(ctx.from.id, "bank_logs");
+      if (!ok) {
+        await ctx.answerCallbackQuery("💎 Premium+ required");
+        await ctx.reply("🔒 Bank Logs requires Premium or VIP.\n\nUpgrade to access:", {
+          reply_markup: new (await import("grammy")).InlineKeyboard().text("💎 Upgrade", "sub:panel"),
+        });
+        return;
+      }
+    }
     await ctx.answerCallbackQuery();
     try {
       const total = await db.select().from(bankLogsTable);

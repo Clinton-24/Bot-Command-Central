@@ -17,6 +17,8 @@ import { registerEmailHandlers, registerEmailCallbacks } from "./handlers/email"
 import { registerHexHandlers, registerHexCallbacks } from "./handlers/hex";
 import { registerExtDbLogsHandlers, registerExtDbLogsCallbacks } from "./handlers/extdblogs";
 import { registerAccessHandlers } from "./handlers/access";
+import { registerSubscriptionHandlers } from "./handlers/subscription";
+import { registerAIAgentHandlers } from "./handlers/ai_agents";
 import { registerCardShopHandlers, registerCardShopCallbacks } from "./handlers/cardshop";
 import { registerDbLogsHandlers, registerDbLogsCallbacks } from "./handlers/dblogs";
 
@@ -78,6 +80,8 @@ export function createBot(): MyBot {
   registerExtDbLogsHandlers(bot);
   registerExtDbLogsCallbacks(bot);
   registerAccessHandlers(bot);
+  registerSubscriptionHandlers(bot);
+  registerAIAgentHandlers(bot);
   registerOwnerHandlers(bot);
   registerDbLogsHandlers(bot);
   registerDbLogsCallbacks(bot);

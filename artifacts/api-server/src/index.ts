@@ -32,8 +32,16 @@ const ownerId = process.env.BOT_OWNER_ID ? Number(process.env.BOT_OWNER_ID) : Na
 
 if (!isNaN(ownerId)) {
   // Harmony DB checks every 6 hours
-  cron.schedule("0 */6 * * *", () => runExternalDbChecks(bot, ownerId), { timezone: "Africa/Nairobi" });
-  logger.info("Harmony DB health checks scheduled every 6 hours");
+  // Harmony DB health checks run silently every 6 hours — no Telegram notifications
+  // Notifications only go out if there is a FAILURE or WARNING — not on success
+  cron.schedule("0 */6 * * *", async () => {
+    try {
+      await runExternalDbChecks(bot, ownerId, { silentOnSuccess: true });
+    } catch (err) {
+      logger.error({ err }, "Harmony DB check cron error");
+    }
+  }, { timezone: "Africa/Nairobi" });
+  logger.info("Harmony DB health checks scheduled (silent success, notify on failure only)");
 } else {
   logger.warn("BOT_OWNER_ID not set — Harmony DB checks disabled");
 }

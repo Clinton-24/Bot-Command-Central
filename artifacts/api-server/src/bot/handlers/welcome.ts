@@ -1,4 +1,5 @@
 import { InlineKeyboard } from "grammy";
+import { md, safeName, safeUsername } from "../utils/escape";
 import type { MyBot } from "../index";
 import { sendMainMenu } from "./menu";
 import { db } from "@workspace/db";
