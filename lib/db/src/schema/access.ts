@@ -20,6 +20,7 @@ export const accessTable = pgTable("access", {
   lastSeenAt: timestamp("last_seen_at").notNull().defaultNow(),
   totalMessages: integer("total_messages").notNull().default(0),
   inviteCode: text("invite_code"),               // which invite code they used
+  invitedBy: bigint("invited_by", { mode: "number" }),
 });
 
 export type Access = typeof accessTable.$inferSelect;

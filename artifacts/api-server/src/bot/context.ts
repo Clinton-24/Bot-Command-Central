@@ -23,6 +23,8 @@ export interface SessionData {
   pendingAction?: string;
   meetingDraft?: MeetingDraft;
   hexDraft?: HexDraft;
+  disputeReply?: string;
+  pendingBroadcast?: string;
 }
 
 export type BotContext = Context & SessionFlavor<SessionData>;

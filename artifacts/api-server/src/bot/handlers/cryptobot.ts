@@ -77,14 +77,25 @@ export async function createCryptoBotInvoice(params: {
   amount: number;
   orderId?: number;
   purchaseId?: number;
+  subscriptionId?: number;
   productName: string;
   userId: number;
 }): Promise<CryptoBotInvoice> {
-  const reference = params.purchaseId ? `Quota purchase #${params.purchaseId}` : `Order #${params.orderId}`;
+  const reference = params.purchaseId
+    ? `Quota purchase #${params.purchaseId}`
+    : params.subscriptionId
+      ? `Tier subscription #${params.subscriptionId}`
+      : `Order #${params.orderId}`;
   const payload = params.purchaseId
     ? { type: "crescent_quota", purchaseId: params.purchaseId, userId: params.userId }
-    : { orderId: params.orderId, userId: params.userId };
-  const startParameter = params.purchaseId ? `crescent_quota_${params.purchaseId}` : `order_${params.orderId}`;
+    : params.subscriptionId
+      ? { type: "tier_subscription", subscriptionId: params.subscriptionId, userId: params.userId }
+      : { orderId: params.orderId, userId: params.userId };
+  const startParameter = params.purchaseId
+    ? `crescent_quota_${params.purchaseId}`
+    : params.subscriptionId
+      ? `tier_subscription_${params.subscriptionId}`
+      : `order_${params.orderId}`;
 
   const invoice = await cryptoBotRequest<CryptoBotInvoice>("createInvoice", {
     asset: params.asset,
@@ -199,7 +210,7 @@ export function createCryptoBotRouter(bot: MyBot): Router {
       logger.info({ invoice_id: invoice.invoice_id, asset: invoice.asset, amount: invoice.amount }, "CryptoBot payment received");
 
       // Parse order info from payload
-      let parsed: { type?: string; purchaseId?: number; orderId?: number; userId?: number };
+      let parsed: { type?: string; purchaseId?: number; subscriptionId?: number; orderId?: number; userId?: number };
       try {
         parsed = JSON.parse(invoice.payload ?? "{}") as typeof parsed;
       } catch {
@@ -217,6 +228,22 @@ export function createCryptoBotRouter(bot: MyBot): Router {
             parsed.userId,
             `✅ *CRESCENT QUOTA ADDED*\n━━━━━━━━━━━━━━━━━━\n\n+20 queries have been added to your account.`,
             { parse_mode: "Markdown" },
+          ).catch(() => {});
+        }
+        return res.json({ ok: true });
+      }
+
+      if (parsed.type === "tier_subscription") {
+        if (!parsed.subscriptionId || !parsed.userId) {
+          return res.status(400).json({ ok: false, error: "Missing tier subscription details" });
+        }
+        const { confirmTierSubscription } = await import("./access");
+        const granted = await confirmTierSubscription(parsed.subscriptionId, parsed.userId, invoice.invoice_id);
+        if (granted) {
+          await bot.api.sendMessage(
+            parsed.userId,
+            `✅ *PAID ACCESS ACTIVATED*\n━━━━━━━━━━━━━━━━━━\n\nYour subscription is active for 30 days.`,
+            { parse_mode: "Markdown", reply_markup: { inline_keyboard: [[{ text: "🏠 Main Menu", callback_data: "menu:main" }]] } },
           ).catch(() => {});
         }
         return res.json({ ok: true });

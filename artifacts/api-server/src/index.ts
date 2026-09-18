@@ -3,8 +3,6 @@ import { logger } from "./lib/logger";
 import { getBotInstance } from "./bot/index";
 import { registerBatteryWebhook } from "./bot/handlers/battery";
 import { webhookCallback } from "grammy";
-import cron from "node-cron";
-import { runExternalDbChecks } from "./bot/handlers/extdblogs";
 import { runMigrations } from "./lib/migrate";
 import { createCryptoBotRouter } from "./bot/handlers/cryptobot";
 
@@ -26,6 +24,7 @@ app.get("/health", (_req, res) => {
   res.status(200).json({ status: "ok", uptime: process.uptime() });
 });
 
+<<<<<<< HEAD
 // Quick AI test endpoint — GET /test-ai to verify OpenRouter is working
 app.get("/test-ai", async (_req, res) => {
   const key = process.env.OPENROUTER_API_KEY;
@@ -86,6 +85,8 @@ if (!isNaN(ownerId)) {
   logger.warn("BOT_OWNER_ID not set — Harmony DB checks disabled");
 }
 
+=======
+>>>>>>> ddb5a5f879e0b42eaee46badf837c8a846c0eca0
 // ── Keep-alive (prevents Render free tier from sleeping) ──────────────────────
 
 function startKeepAlive(): void {

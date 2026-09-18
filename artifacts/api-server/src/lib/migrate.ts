@@ -69,6 +69,7 @@ export async function runMigrations(): Promise<void> {
     `);
 
     await client.query(`
+<<<<<<< HEAD
       CREATE TABLE IF NOT EXISTS access (
         id SERIAL PRIMARY KEY,
         user_id BIGINT NOT NULL UNIQUE,
@@ -113,10 +114,32 @@ export async function runMigrations(): Promise<void> {
         username TEXT,
         first_name TEXT,
         message TEXT NOT NULL,
+=======
+      ALTER TABLE IF EXISTS access
+        ADD COLUMN IF NOT EXISTS invited_by BIGINT;
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS tier_subscriptions (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        tier TEXT NOT NULL,
+        amount NUMERIC(10, 2) NOT NULL,
+        coin TEXT NOT NULL,
+        address TEXT NOT NULL,
+        reference TEXT NOT NULL UNIQUE,
+        invoice_id INTEGER UNIQUE,
+        status TEXT NOT NULL DEFAULT 'pending',
+        claimed_at TIMESTAMP,
+        confirmed_at TIMESTAMP,
+        starts_at TIMESTAMP,
+        expires_at TIMESTAMP,
+>>>>>>> ddb5a5f879e0b42eaee46badf837c8a846c0eca0
         created_at TIMESTAMP NOT NULL DEFAULT NOW()
       );
     `);
 
+<<<<<<< HEAD
     await client.query(`
       CREATE TABLE IF NOT EXISTS bank_logs (
         id SERIAL PRIMARY KEY,
@@ -136,6 +159,41 @@ export async function runMigrations(): Promise<void> {
         notes TEXT
       );
     `);
+=======
+    let hasVectorExtension = true;
+    try {
+      await client.query("CREATE EXTENSION IF NOT EXISTS vector");
+    } catch (err) {
+      hasVectorExtension = false;
+      logger.warn({ err }, "pgvector extension unavailable; AI memory will use text-only persistence");
+    }
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_memory (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        task TEXT NOT NULL DEFAULT 'chat',
+        embedding ${hasVectorExtension ? "vector(1536)" : "TEXT"},
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS ai_memory_user_created_at_idx
+      ON ai_memory (user_id, created_at);
+    `);
+    if (hasVectorExtension) {
+      try {
+        await client.query(`
+          CREATE INDEX IF NOT EXISTS ai_memory_embedding_idx
+          ON ai_memory USING hnsw (embedding vector_cosine_ops);
+        `);
+      } catch (err) {
+        logger.warn({ err }, "Could not create pgvector similarity index");
+      }
+    }
+>>>>>>> ddb5a5f879e0b42eaee46badf837c8a846c0eca0
 
     logger.info("Migrations complete ✅");
   } catch (err) {

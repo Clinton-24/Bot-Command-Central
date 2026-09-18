@@ -44,6 +44,7 @@ import {
   formatCrescentQuota,
   getCrescentQuotaStatus,
 } from "./crescent-quota";
+<<<<<<< HEAD
 
 // ── OpenRouter ────────────────────────────────────────────────────────────────
 
@@ -61,6 +62,11 @@ const FREE_MODELS = [
   "microsoft/phi-4-reasoning-plus:free",
   "meta-llama/llama-3.2-11b-vision-instruct:free",
 ];
+=======
+import { buildMemoryContext, clearMemory, rememberExchange } from "../../lib/ai-memory";
+import { configuredModelCount, routeChat, type ChatMessage } from "../../lib/model-router";
+import type { TaskType } from "../../lib/model-config";
+>>>>>>> ddb5a5f879e0b42eaee46badf837c8a846c0eca0
 
 // ── Quota ─────────────────────────────────────────────────────────────────────
 
@@ -282,13 +288,17 @@ FORMAT RULES:
 - Today: ${new Date().toLocaleDateString("en-KE", { timeZone: "Africa/Nairobi", weekday: "long", year: "numeric", month: "long", day: "numeric" })}`;
 }
 
-// ── OpenRouter call with fallback ─────────────────────────────────────────────
+// ── Configured model router ────────────────────────────────────────────────────
 
-async function callOpenRouter(
-  messages: Array<{ role: "user" | "assistant" | "system"; content: string }>
+async function routeModel(
+  task: TaskType,
+  messages: ChatMessage[],
 ): Promise<{ reply: string; model: string }> {
-  if (!OPENROUTER_API_KEY) throw new Error("OPENROUTER_API_KEY not set on Render.");
+  const response = await routeChat(task, messages);
+  return { reply: response.reply, model: response.model };
+}
 
+<<<<<<< HEAD
   let lastError = "";
   for (const model of FREE_MODELS) {
     try {
@@ -351,6 +361,16 @@ async function callOpenRouter(
     );
   }
   throw new Error(`All free models unavailable. Last error: ${lastError}\n\nCheck openrouter.ai/models for current free models.`);
+=======
+function inferTask(input: string, ctx: BotContext): TaskType {
+  const lower = input.toLowerCase();
+  if (ctx.message && "photo" in ctx.message) return "vision";
+  if (/```|\b(typescript|javascript|python|sql|code|debug|function|api|regex)\b/.test(lower)) return "code";
+  if (/\b(calcul|equation|algebra|integral|derivative|probability|percentage|solve)\b|[0-9]\s*[+*/-]\s*[0-9]/.test(lower)) return "math";
+  if (/\b(analy[sz]|compare|evaluate|investigate|summari[sz]|why|pros and cons|root cause)\b/.test(lower)) return "analysis";
+  if (/\b(write|rewrite|story|poem|creative|headline|campaign|slogan|caption)\b/.test(lower)) return "creative";
+  return "chat";
+>>>>>>> ddb5a5f879e0b42eaee46badf837c8a846c0eca0
 }
 
 // ── Agent action parser & executor ────────────────────────────────────────────
@@ -411,9 +431,8 @@ async function executeAction(bot: MyBot, ownerId: number, action: AgentAction): 
   }
 }
 
-// ── Conversation history ──────────────────────────────────────────────────────
+// ── Persistent conversation memory ─────────────────────────────────────────────
 
-const history = new Map<number, Array<{ role: "user" | "assistant"; content: string }>>();
 const activeHexagonUsers = new Set<number>();
 const seenHexagonUpdates = new Set<number>();
 const MAX_SEEN_HEXAGON_UPDATES = 1000;
@@ -430,31 +449,25 @@ function wasAlreadyHandled(updateId: number): boolean {
   return false;
 }
 
-function getHistory(id: number) {
-  if (!history.has(id)) history.set(id, []);
-  return history.get(id)!;
-}
-
-function trimHistory(h: Array<unknown>, max = 20) {
-  if (h.length > max) h.splice(0, h.length - max);
-}
-
 // ── Core ask ──────────────────────────────────────────────────────────────────
 
 async function askHexagon(
   userId: number,
   userMessage: string,
-  ctx?: BotContext
+  ctx?: BotContext,
+  task: TaskType = "chat",
 ): Promise<{ reply: string; model: string; actionResult?: string }> {
-  const h = getHistory(userId);
-  h.push({ role: "user", content: userMessage });
-  trimHistory(h);
-
-  const system = await buildSystemPrompt(ctx);
-  const { reply, model } = await callOpenRouter([{ role: "system", content: system }, ...h]);
+  const [system, memory] = await Promise.all([
+    buildSystemPrompt(ctx),
+    buildMemoryContext(userId, userMessage),
+  ]);
+  const { reply, model } = await routeModel(task, [
+    { role: "system", content: `${system}\n\n${memory}` },
+    { role: "user", content: userMessage },
+  ]);
 
   const { clean, action } = extractAction(reply);
-  h.push({ role: "assistant", content: clean });
+  void rememberExchange(userId, userMessage, clean, task);
 
   let actionResult: string | undefined;
   if (action && ctx) {
@@ -539,7 +552,7 @@ export async function handleHexagonMessage(ctx: BotContext, input: string): Prom
     const thinking = await ctx.reply(`🧠 _Crescent thinking... (${quotaLabel})_`, { parse_mode: "Markdown" });
 
     try {
-      const { reply, actionResult } = await askHexagon(userId, input, ctx);
+      const { reply, actionResult } = await askHexagon(userId, input, ctx, inferTask(input, ctx));
       await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
 
       const chunks = split(reply);
@@ -619,7 +632,7 @@ async function runGroupAnalysis(ctx: BotContext, bot: MyBot): Promise<void> {
       .map((m) => `[${m.firstName ?? m.username ?? m.userId}]: ${m.message}`)
       .join("\n");
 
-    const { reply } = await callOpenRouter([
+    const { reply } = await routeModel("analysis", [
       {
         role: "system",
         content: `You are CRESCENT, an expert group behaviour analyst and Bot-Command-Central operations analyst. Analyse the Telegram group and the bot snapshot provided below. Provide:
@@ -712,7 +725,7 @@ export function registerHexagonHandlers(bot: MyBot): void {
 
   bot.command("clearai", async (ctx) => {
     if (!ctx.from || !(await checkCrescentAccess(ctx))) return;
-    history.delete(ctx.from.id);
+    await clearMemory(ctx.from.id);
     await ctx.reply("🧹 Crescent memory cleared.");
   });
 
@@ -814,14 +827,14 @@ export function registerHexagonCallbacks(bot: MyBot): void {
     const quotaText = quota.unlimited ? "Unlimited" : formatCrescentQuota(quota);
     const bar = quota.unlimited ? "██████████" : "█".repeat(Math.min(10, Math.round((quota.used / quota.limit) * 10))) + "░".repeat(Math.max(0, 10 - Math.round((quota.used / quota.limit) * 10)));
     await ctx.editMessageText(
-      `📊 *CRESCENT USAGE*\n━━━━━━━━━━━━━━━━━━\n\n${bar}\n*${quotaText}*\n\n_Resets midnight Nairobi time_\n_Free models: ${FREE_MODELS.length} in fallback pool_`,
+      `📊 *CRESCENT USAGE*\n━━━━━━━━━━━━━━━━━━\n\n${bar}\n*${quotaText}*\n\n_Resets midnight Nairobi time_\n_Chat route: ${configuredModelCount("chat")} configured models · Analysis route: ${configuredModelCount("analysis")} configured models_`,
       { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🔙 Back", "menu:hexagon") }
     );
   });
 
   bot.callbackQuery("hexagon:clear", async (ctx) => {
     if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery(); return; }
-    history.delete(ctx.from.id);
+    await clearMemory(ctx.from.id);
     await ctx.answerCallbackQuery("🧹 Cleared");
     await ctx.editMessageText(
       `🤖 *CRESCENT*\n━━━━━━━━━━━━━━━━━━\n\n🧹 Memory cleared. Fresh start!`,

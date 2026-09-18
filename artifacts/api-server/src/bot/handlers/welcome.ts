@@ -31,7 +31,10 @@ export function registerWelcomeHandler(bot: MyBot): void {
             firstName: member.first_name,
             lastName: member.last_name,
           })
-          .onConflictDoNothing();
+          .onConflictDoUpdate({
+            target: usersTable.id,
+            set: { username: member.username, firstName: member.first_name, lastName: member.last_name },
+          });
 
         const name = member.first_name || member.username || "User";
         const username = member.username ? `@${member.username}` : name;
@@ -105,13 +108,20 @@ export function registerWelcomeHandler(bot: MyBot): void {
       await db.insert(usersTable).values({
         id: from.id, username: from.username,
         firstName: from.first_name, lastName: from.last_name,
-      }).onConflictDoNothing();
+      }).onConflictDoUpdate({
+        target: usersTable.id,
+        set: { username: from.username, firstName: from.first_name, lastName: from.last_name },
+      });
     } catch (err) {
       logger.error({ err }, "start: failed to save user");
     }
 
     // Handle invite code in /start payload
     const payload = ctx.match?.trim();
+    if (payload?.startsWith("tier_subscription_")) {
+      await sendMainMenu(ctx);
+      return;
+    }
     if (payload && payload.length > 0 && !isOwner(from.id)) {
       await handleInviteCode(bot, ctx, payload);
       return;
