@@ -27,34 +27,17 @@ import type { MyBot } from "../index";
 import type { BotContext } from "../context";
 import { isOwner } from "../helpers";
 import { logger } from "../../lib/logger";
+import { routeChat } from "../../lib/model-router";
+import type { TaskType } from "../../lib/model-config";
 
-// ── AgentRouter call (shared) ─────────────────────────────────────────────────
+// ── Configured model router ────────────────────────────────────────────────────
 
-const API_KEY = process.env.AGENTROUTER_API_KEY ?? "";
-const BASE = "https://agentrouter.org/v1";
-const MODEL = "claude-sonnet-4-5-20250929";
-const FALLBACK = "gpt-4o";
-
-async function ask(
-  system: string,
-  user: string,
-  model = MODEL
-): Promise<string> {
-  if (!API_KEY) throw new Error("AGENTROUTER_API_KEY not set on Render.");
-  for (const m of [model, FALLBACK, "deepseek-chat", "gemini-2.0-flash"]) {
-    try {
-      const res = await fetch(`${BASE}/chat/completions`, {
-        method: "POST",
-        headers: { "Authorization": `Bearer ${API_KEY}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ model: m, max_tokens: 1024, messages: [{ role: "system", content: system }, { role: "user", content: user }] }),
-      });
-      if (!res.ok) continue;
-      const data = await res.json() as { choices?: Array<{ message?: { content?: string } }> };
-      const reply = data.choices?.[0]?.message?.content?.trim() ?? "";
-      if (reply) return reply;
-    } catch { continue; }
-  }
-  throw new Error("All AgentRouter models failed.");
+async function ask(system: string, user: string, task: TaskType = "chat"): Promise<string> {
+  const response = await routeChat(task, [
+    { role: "system", content: system },
+    { role: "user", content: user },
+  ]);
+  return response.reply;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -85,7 +68,8 @@ export async function generateHarmonyHealthSummary(bot: MyBot, ownerId: number):
 
     const summary = await ask(
       `You are a database health analyst. Write a concise Telegram-formatted DB health report. Use *bold* for key metrics. Max 200 words. Be direct and professional.`,
-      `Harmony DB stats:\n- Size: ${sizeRes.rows[0]?.size} (${pct}% of 1TB limit)\n- Active connections: ${activeConn}\n- Tables: ${tables}\n- Date: ${new Date().toDateString()}\n\nWrite a health summary with: overall status, storage trend, any warnings, and one recommendation.`
+      `Harmony DB stats:\n- Size: ${sizeRes.rows[0]?.size} (${pct}% of 1TB limit)\n- Active connections: ${activeConn}\n- Tables: ${tables}\n- Date: ${new Date().toDateString()}\n\nWrite a health summary with: overall status, storage trend, any warnings, and one recommendation.`,
+      "analysis",
     );
 
     await bot.api.sendMessage(
@@ -108,7 +92,8 @@ export async function priceBankLog(log: {
 }): Promise<string> {
   return ask(
     `You are a bank log pricing expert. Return ONLY a dollar amount like "$75" or "$120-150". No explanation. Just the price.`,
-    `Price this bank log:\nBank: ${log.bankName}\nCountry: ${log.country}\nType: ${log.accountType}\nBalance: ${log.balance ?? "unknown"}\nExtras: ${log.extras ?? "none"}`
+    `Price this bank log:\nBank: ${log.bankName}\nCountry: ${log.country}\nType: ${log.accountType}\nBalance: ${log.balance ?? "unknown"}\nExtras: ${log.extras ?? "none"}`,
+    "analysis",
   );
 }
 
@@ -121,7 +106,8 @@ export async function generateProductDescription(product: {
 }): Promise<string> {
   return ask(
     `You are a copywriter for a Telegram digital goods shop. Write a short punchy product description for a Telegram bot shop listing. Max 2 sentences. No emojis. Be specific and enticing.`,
-    `Product: ${product.name}\nCategory: ${product.category}\nPrice: $${product.price}\nDelivery: ${product.deliveryType === "auto" ? "Instant auto-delivery" : "Manual delivery"}`
+    `Product: ${product.name}\nCategory: ${product.category}\nPrice: $${product.price}\nDelivery: ${product.deliveryType === "auto" ? "Instant auto-delivery" : "Manual delivery"}`,
+    "creative",
   );
 }
 
@@ -136,7 +122,8 @@ export async function getModDecision(message: string, context: {
 }): Promise<{ decision: ModDecision; reason: string }> {
   const raw = await ask(
     `You are a Telegram group moderator AI. Analyze messages and return ONLY valid JSON like: {"decision":"warn","reason":"..."}\nDecisions: warn (first offense), kick (repeated/moderate), ban (severe/spam/illegal), ignore (fine).\nNo markdown, no explanation, just JSON.`,
-    `Message: "${message}"\nUser: ${context.username ?? "unknown"}\nPrior warnings: ${context.previousWarnings ?? 0}\nSpam detected: ${context.isSpam ?? false}`
+    `Message: "${message}"\nUser: ${context.username ?? "unknown"}\nPrior warnings: ${context.previousWarnings ?? 0}\nSpam detected: ${context.isSpam ?? false}`,
+    "analysis",
   );
   try {
     return JSON.parse(raw.replace(/```json|```/g, "").trim()) as { decision: ModDecision; reason: string };
@@ -155,7 +142,8 @@ export async function handleOrderDispute(dispute: {
 }): Promise<string> {
   return ask(
     `You are a customer service agent for a digital goods Telegram shop. Draft a professional, empathetic reply to a customer dispute. Keep it under 100 words. Be solution-focused.`,
-    `Order #${dispute.orderId} — ${dispute.productName}\nStatus: ${dispute.orderStatus}\nPayment: ${dispute.paymentMethod ?? "unknown"}\nCustomer says: "${dispute.customerMessage}"`
+    `Order #${dispute.orderId} — ${dispute.productName}\nStatus: ${dispute.orderStatus}\nPayment: ${dispute.paymentMethod ?? "unknown"}\nCustomer says: "${dispute.customerMessage}"`,
+    "chat",
   );
 }
 
@@ -166,7 +154,8 @@ export async function handleOrderDispute(dispute: {
 export async function writeBroadcast(intent: string, context?: string): Promise<string> {
   return ask(
     `You are writing a Telegram broadcast message for a digital goods shop. Format it for Telegram using *bold* and _italic_. Keep it under 150 words. Make it engaging and clear. Do NOT add a subject line.`,
-    `Write a broadcast about: ${intent}${context ? `\nContext: ${context}` : ""}`
+    `Write a broadcast about: ${intent}${context ? `\nContext: ${context}` : ""}`,
+    "creative",
   );
 }
 
@@ -177,7 +166,8 @@ export async function writeBroadcast(intent: string, context?: string): Promise<
 export async function handleSupportMessage(message: string, products: string): Promise<string> {
   return ask(
     `You are a helpful customer support agent for a digital goods Telegram shop called Crescent. Answer questions about products, orders, and payments. Be friendly and concise. If you don't know, say "Contact the admin for more details." Max 100 words.`,
-    `Customer message: "${message}"\n\nAvailable products:\n${products}`
+    `Customer message: "${message}"\n\nAvailable products:\n${products}`,
+    "chat",
   );
 }
 
@@ -196,13 +186,16 @@ export async function generateBusinessReport(bot: MyBot, ownerId: number): Promi
       db.select({ count: sql<number>`count(*)` }).from(usersTable),
     ]);
 
+    const productPrices = new Map(allProducts.map((product) => [product.id, Number(product.price)]));
+    const orderRevenue = (order: typeof allOrders[number]): number =>
+      (productPrices.get(order.productId) ?? 0) * order.quantity;
     const revenue = allOrders
       .filter((o) => o.status === "confirmed")
-      .reduce((sum, o) => sum + parseFloat(o.totalAmount ?? "0"), 0);
+      .reduce((sum, o) => sum + orderRevenue(o), 0);
 
     const todayRevenue = todayOrders
       .filter((o) => o.status === "confirmed")
-      .reduce((sum, o) => sum + parseFloat(o.totalAmount ?? "0"), 0);
+      .reduce((sum, o) => sum + orderRevenue(o), 0);
 
     const lowStock = allProducts.filter((p) => Number(p.stock) > 0 && Number(p.stock) <= 5);
     const outOfStock = allProducts.filter((p) => Number(p.stock) === 0);
@@ -221,7 +214,8 @@ export async function generateBusinessReport(bot: MyBot, ownerId: number): Promi
       `- Today's revenue: $${todayRevenue.toFixed(2)}\n` +
       `- All-time revenue: $${revenue.toFixed(2)}\n` +
       `- Low stock items: ${lowStock.map((p) => p.name).join(", ") || "none"}\n` +
-      `- Out of stock: ${outOfStock.map((p) => p.name).join(", ") || "none"}`
+      `- Out of stock: ${outOfStock.map((p) => p.name).join(", ") || "none"}`,
+      "analysis",
     );
 
     await bot.api.sendMessage(
@@ -248,7 +242,8 @@ export async function suggestAccessTier(requestMessage: string): Promise<{
 }> {
   const raw = await ask(
     `You manage access to a private Telegram shop. Based on an access request message, suggest an appropriate tier.\nTiers:\n- free: general users, no spending history mentioned\n- premium: mentions referral, past purchases, or business intent\n- vip: mentions high volume, bulk orders, or strong credentials\n\nReturn ONLY JSON: {"tier":"free","reason":"..."} No markdown.`,
-    `Access request: "${requestMessage}"`
+    `Access request: "${requestMessage}"`,
+    "analysis",
   );
   try {
     return JSON.parse(raw.replace(/```json|```/g, "").trim()) as { tier: "free" | "premium" | "vip"; reason: string };
@@ -283,7 +278,8 @@ export async function queryHarmonyDB(naturalQuestion: string): Promise<string> {
     // Generate SQL
     const sqlQuery = await ask(
       `You are a PostgreSQL expert. Given a database schema and a natural language question, write a safe read-only SQL query.\nRules:\n- SELECT only (no INSERT/UPDATE/DELETE/DROP)\n- Return ONLY the SQL query, no explanation, no markdown\n- Use LIMIT 20 for safety\n- If the question can't be answered with the schema, return: SELECT 'Cannot answer this question' as result`,
-      `Schema:\n${schema}\n\nQuestion: ${naturalQuestion}`
+      `Schema:\n${schema}\n\nQuestion: ${naturalQuestion}`,
+      "code",
     );
 
     const cleanSQL = sqlQuery.replace(/```sql|```/g, "").trim();

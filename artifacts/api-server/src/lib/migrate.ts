@@ -92,6 +92,40 @@ export async function runMigrations(): Promise<void> {
       );
     `);
 
+    let hasVectorExtension = true;
+    try {
+      await client.query("CREATE EXTENSION IF NOT EXISTS vector");
+    } catch (err) {
+      hasVectorExtension = false;
+      logger.warn({ err }, "pgvector extension unavailable; AI memory will use text-only persistence");
+    }
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ai_memory (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        role TEXT NOT NULL,
+        content TEXT NOT NULL,
+        task TEXT NOT NULL DEFAULT 'chat',
+        embedding ${hasVectorExtension ? "vector(1536)" : "TEXT"},
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS ai_memory_user_created_at_idx
+      ON ai_memory (user_id, created_at);
+    `);
+    if (hasVectorExtension) {
+      try {
+        await client.query(`
+          CREATE INDEX IF NOT EXISTS ai_memory_embedding_idx
+          ON ai_memory USING hnsw (embedding vector_cosine_ops);
+        `);
+      } catch (err) {
+        logger.warn({ err }, "Could not create pgvector similarity index");
+      }
+    }
+
     logger.info("Migrations complete ✅");
   } catch (err) {
     logger.error({ err }, "Migration failed ❌");
