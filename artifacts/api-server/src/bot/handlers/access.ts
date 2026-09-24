@@ -7,15 +7,10 @@
  */
 
 import { InlineKeyboard } from "grammy";
-<<<<<<< HEAD
 import { md, safeName, safeUsername } from "../utils/escape";
-import { eq, desc } from "drizzle-orm";
-import { db, accessTable, inviteCodesTable } from "@workspace/db";
-=======
 import { eq, desc, sql } from "drizzle-orm";
 import { HDNodeWallet } from "ethers";
 import { db, accessTable, inviteCodesTable, usersTable, paymentSettingsTable, tierSubscriptionsTable } from "@workspace/db";
->>>>>>> ddb5a5f879e0b42eaee46badf837c8a846c0eca0
 import type { MyBot } from "../index";
 import type { BotContext } from "../context";
 import { isOwner } from "../helpers";
@@ -40,12 +35,8 @@ function s(t: string | undefined | null): string {
 // ── Tier config ───────────────────────────────────────────────────────────────
 
 const TIER_RANK: Record<string, number> = { free: 1, premium: 2, vip: 3 };
-<<<<<<< HEAD
 export const TIER_EMOJI: Record<string, string> = { free: "🟢", premium: "💎", vip: "👑", blocked: "🚫" };
 export const TIER_LABEL: Record<string, string> = { free: "Free", premium: "Premium", vip: "VIP", blocked: "Blocked" };
-=======
-const TIER_EMOJI: Record<string, string> = { free: "🟢", premium: "💎", vip: "👑", blocked: "🚫" };
-const TIER_LABEL: Record<string, string> = { free: "Free", premium: "Premium", vip: "VIP", blocked: "Blocked" };
 export const VIP_MONTHLY_PRICE = 10;
 
 export function premiumMonthlyPrice(): number {
@@ -56,7 +47,6 @@ export function premiumMonthlyPrice(): number {
 export function tierMonthlyPrice(tier: "premium" | "vip"): number {
   return tier === "vip" ? VIP_MONTHLY_PRICE : premiumMonthlyPrice();
 }
->>>>>>> ddb5a5f879e0b42eaee46badf837c8a846c0eca0
 
 export function tierRank(tier: string): number {
   return TIER_RANK[tier] ?? 0;
