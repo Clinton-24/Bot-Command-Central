@@ -69,7 +69,6 @@ export async function runMigrations(): Promise<void> {
     `);
 
     await client.query(`
-<<<<<<< HEAD
       CREATE TABLE IF NOT EXISTS access (
         id SERIAL PRIMARY KEY,
         user_id BIGINT NOT NULL UNIQUE,
@@ -87,8 +86,14 @@ export async function runMigrations(): Promise<void> {
         created_at TIMESTAMP NOT NULL DEFAULT NOW(),
         last_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
         total_messages INTEGER NOT NULL DEFAULT 0,
-        invite_code TEXT
+        invite_code TEXT,
+        invited_by BIGINT
       );
+    `);
+
+    await client.query(`
+      ALTER TABLE IF EXISTS access
+        ADD COLUMN IF NOT EXISTS invited_by BIGINT;
     `);
 
     await client.query(`
@@ -114,32 +119,10 @@ export async function runMigrations(): Promise<void> {
         username TEXT,
         first_name TEXT,
         message TEXT NOT NULL,
-=======
-      ALTER TABLE IF EXISTS access
-        ADD COLUMN IF NOT EXISTS invited_by BIGINT;
-    `);
-
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS tier_subscriptions (
-        id SERIAL PRIMARY KEY,
-        user_id BIGINT NOT NULL,
-        tier TEXT NOT NULL,
-        amount NUMERIC(10, 2) NOT NULL,
-        coin TEXT NOT NULL,
-        address TEXT NOT NULL,
-        reference TEXT NOT NULL UNIQUE,
-        invoice_id INTEGER UNIQUE,
-        status TEXT NOT NULL DEFAULT 'pending',
-        claimed_at TIMESTAMP,
-        confirmed_at TIMESTAMP,
-        starts_at TIMESTAMP,
-        expires_at TIMESTAMP,
->>>>>>> ddb5a5f879e0b42eaee46badf837c8a846c0eca0
         created_at TIMESTAMP NOT NULL DEFAULT NOW()
       );
     `);
 
-<<<<<<< HEAD
     await client.query(`
       CREATE TABLE IF NOT EXISTS bank_logs (
         id SERIAL PRIMARY KEY,
@@ -159,7 +142,26 @@ export async function runMigrations(): Promise<void> {
         notes TEXT
       );
     `);
-=======
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS tier_subscriptions (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        tier TEXT NOT NULL,
+        amount NUMERIC(10, 2) NOT NULL,
+        coin TEXT NOT NULL,
+        address TEXT NOT NULL,
+        reference TEXT NOT NULL UNIQUE,
+        invoice_id INTEGER UNIQUE,
+        status TEXT NOT NULL DEFAULT 'pending',
+        claimed_at TIMESTAMP,
+        confirmed_at TIMESTAMP,
+        starts_at TIMESTAMP,
+        expires_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+    `);
+
     let hasVectorExtension = true;
     try {
       await client.query("CREATE EXTENSION IF NOT EXISTS vector");
@@ -193,7 +195,6 @@ export async function runMigrations(): Promise<void> {
         logger.warn({ err }, "Could not create pgvector similarity index");
       }
     }
->>>>>>> ddb5a5f879e0b42eaee46badf837c8a846c0eca0
 
     logger.info("Migrations complete ✅");
   } catch (err) {
