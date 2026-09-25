@@ -20,8 +20,8 @@ import { checkCryptoBotInvoice, createCryptoBotInvoice, CRYPTOBOT_ASSETS, type C
 // ── Tier hierarchy ────────────────────────────────────────────────────────────
 
 const TIER_RANK: Record<string, number> = { free: 1, premium: 2, vip: 3 };
-const TIER_EMOJI: Record<string, string> = { free: "🟢", premium: "💎", vip: "👑", blocked: "🚫" };
-const TIER_LABEL: Record<string, string> = { free: "Free", premium: "Premium", vip: "VIP", blocked: "Blocked" };
+export const TIER_EMOJI: Record<string, string> = { free: "🟢", premium: "💎", vip: "👑", blocked: "🚫" };
+export const TIER_LABEL: Record<string, string> = { free: "Free", premium: "Premium", vip: "VIP", blocked: "Blocked" };
 export const VIP_MONTHLY_PRICE = 10;
 
 export function premiumMonthlyPrice(): number {
