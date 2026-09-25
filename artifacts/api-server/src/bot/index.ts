@@ -15,7 +15,6 @@ import { registerReminderHandlers, startDailyDigestScheduler } from "./handlers/
 import { registerBatteryHandlers } from "./handlers/battery";
 import { registerEmailHandlers, registerEmailCallbacks } from "./handlers/email";
 import { registerHexHandlers, registerHexCallbacks } from "./handlers/hex";
-import { registerExtDbLogsHandlers, registerExtDbLogsCallbacks } from "./handlers/extdblogs";
 import { registerAccessHandlers } from "./handlers/access";
 import { registerSubscriptionHandlers } from "./handlers/subscription";
 import { registerAIAgentHandlers } from "./handlers/ai_agents";
@@ -77,8 +76,6 @@ export function createBot(): MyBot {
   // Owner panel
   registerHexHandlers(bot);
   registerHexCallbacks(bot);
-  registerExtDbLogsHandlers(bot);
-  registerExtDbLogsCallbacks(bot);
   registerAccessHandlers(bot);
   registerSubscriptionHandlers(bot);
   registerAIAgentHandlers(bot);
@@ -113,4 +110,3 @@ export function getBotInstance(): MyBot {
   if (!botInstance) botInstance = createBot();
   return botInstance;
 }
- 
