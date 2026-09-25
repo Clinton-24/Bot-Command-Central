@@ -1,15 +1,14 @@
 /**
- * CRESCENT — AI Agent for Bot-Command-Central
- * ─────────────────────────────────────────────
- * • Free model fallback loop (5 models)
- * • Daily quota: 50 queries/day (resets midnight Nairobi)
- * • Group analyst: reads group messages, summarises user behaviour
- * • Agent mode: performs live tasks (broadcast, ban, product ops, etc.)
- * • Shop-aware: live product + order context injected into every prompt
+ * CRESCENT â€” AI Agent for Bot-Command-Central
+ * â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+ * â€¢ Free model fallback loop (5 models)
+ * â€¢ Daily quota: 50 queries/day (resets midnight Nairobi)
+ * â€¢ Group analyst: reads group messages, summarises user behaviour
+ * â€¢ Agent mode: performs live tasks (broadcast, ban, product ops, etc.)
+ * â€¢ Shop-aware: live product + order context injected into every prompt
  */
 
 import { InlineKeyboard } from "grammy";
-import { Pool } from "pg";
 import { eq, desc, gte, and, count } from "drizzle-orm";
 import {
   accessTable,
@@ -18,7 +17,6 @@ import {
   crescentQuotaPurchasesTable,
   db,
   dbLogsTable,
-  externalDbLogsTable,
   groupMessagesTable,
   groupSettingsTable,
   meetingsTable,
@@ -47,9 +45,9 @@ import { buildMemoryContext, clearMemory, rememberExchange } from "../../lib/ai-
 import { configuredModelCount, routeChat, type ChatMessage } from "../../lib/model-router";
 import type { TaskType } from "../../lib/model-config";
 
-// ── Quota ─────────────────────────────────────────────────────────────────────
+// â”€â”€ Quota â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-// ── Context builders ──────────────────────────────────────────────────────────
+// â”€â”€ Context builders â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function buildShopContext(): Promise<string> {
   try {
@@ -69,11 +67,11 @@ async function buildShopContext(): Promise<string> {
           const delivery = p.deliveryType === "auto" && p.deliveryContent
             ? "Digital auto-delivery"
             : "Manual delivery";
-          return `• ${p.name} | $${p.price} | Availability: ${availability} | Delivery: ${delivery} | Category: ${p.category}`;
+          return `â€¢ ${p.name} | $${p.price} | Availability: ${availability} | Delivery: ${delivery} | Category: ${p.category}`;
         }).join("\n");
     const orderLines = orders.length === 0
       ? "No recent orders."
-      : orders.map((o) => `• Order #${o.id} | Product:${o.productId} | Qty:${o.quantity} | Status:${o.status}`).join("\n");
+      : orders.map((o) => `â€¢ Order #${o.id} | Product:${o.productId} | Qty:${o.quantity} | Status:${o.status}`).join("\n");
     return `LIVE SHOP DATA:\n${productLines}\n\nRECENT ORDERS:\n${orderLines}`;
   } catch {
     return "Shop data unavailable.";
@@ -103,7 +101,7 @@ async function buildGroupContext(chatId: number): Promise<string> {
     const lines = Array.from(byUser.entries())
       .sort((a, b) => b[1].count - a[1].count)
       .slice(0, 10)
-      .map(([, v]) => `• ${v.name} (${v.count} msgs): "${v.samples.join('" | "')}"`)
+      .map(([, v]) => `â€¢ ${v.name} (${v.count} msgs): "${v.samples.join('" | "')}"`)
       .join("\n");
 
     return `LAST 24H GROUP ACTIVITY (${messages.length} messages, ${byUser.size} users):\n${lines}`;
@@ -112,59 +110,6 @@ async function buildGroupContext(chatId: number): Promise<string> {
   }
 }
 
-async function buildHarmonyContext(): Promise<string> {
-  const externalDbUrl = process.env.EXTERNAL_DB_URL;
-  if (!externalDbUrl) return "HARMONY DB: not configured.";
-
-  const pool = new Pool({
-    connectionString: externalDbUrl,
-    ssl: { rejectUnauthorized: false },
-    connectionTimeoutMillis: 5000,
-    max: 1,
-  });
-
-  try {
-    const [tablesResult, columnsResult] = await Promise.all([
-      pool.query<{ table_name: string; estimated_rows: string | number }>(`
-        SELECT c.relname AS table_name,
-               COALESCE(s.n_live_tup, 0)::bigint AS estimated_rows
-        FROM pg_class c
-        JOIN pg_namespace n ON n.oid = c.relnamespace
-        LEFT JOIN pg_stat_user_tables s ON s.relid = c.oid
-        WHERE n.nspname = 'public' AND c.relkind IN ('r', 'p')
-        ORDER BY c.relname
-      `),
-      pool.query<{ table_name: string; column_name: string; data_type: string }>(`
-        SELECT table_name, column_name, data_type
-        FROM information_schema.columns
-        WHERE table_schema = 'public'
-        ORDER BY table_name, ordinal_position
-      `),
-    ]);
-
-    const columnsByTable = new Map<string, string[]>();
-    for (const column of columnsResult.rows) {
-      const columns = columnsByTable.get(column.table_name) ?? [];
-      columns.push(`${column.column_name}:${column.data_type}`);
-      columnsByTable.set(column.table_name, columns);
-    }
-
-    const tableLines = tablesResult.rows.map((table) => {
-      const columns = columnsByTable.get(table.table_name)?.join(", ") ?? "no columns reported";
-      return `• ${table.table_name} (~${Number(table.estimated_rows)} rows) — ${columns}`;
-    });
-
-    return [
-      "HARMONY DB SCHEMA (read-only metadata; no credentials or row values included):",
-      tableLines.length > 0 ? tableLines.join("\n") : "No public tables found.",
-    ].join("\n");
-  } catch (err) {
-    logger.warn({ err }, "Crescent could not inspect Harmony DB metadata");
-    return "HARMONY DB: configured but schema metadata is unavailable.";
-  } finally {
-    await pool.end().catch(() => {});
-  }
-}
 
 async function buildBotContext(): Promise<string> {
   try {
@@ -179,7 +124,6 @@ async function buildBotContext(): Promise<string> {
       blacklist,
       meetings,
       botLogs,
-      harmonyLogs,
       quotaPurchases,
       quotaCredits,
     ] = await Promise.all([
@@ -193,7 +137,6 @@ async function buildBotContext(): Promise<string> {
       db.select({ total: count() }).from(blacklistTable),
       db.select({ total: count() }).from(meetingsTable),
       db.select({ status: dbLogsTable.status, message: dbLogsTable.message }).from(dbLogsTable).orderBy(desc(dbLogsTable.createdAt)).limit(8),
-      db.select({ status: externalDbLogsTable.status, checkType: externalDbLogsTable.checkType, message: externalDbLogsTable.message }).from(externalDbLogsTable).orderBy(desc(externalDbLogsTable.createdAt)).limit(8),
       db.select({ total: count() }).from(crescentQuotaPurchasesTable),
       db.select({ total: count() }).from(crescentQuotaCreditsTable),
     ]);
@@ -201,38 +144,31 @@ async function buildBotContext(): Promise<string> {
     const total = (rows: Array<{ total: number }>): number => rows[0]?.total ?? 0;
     const botLogsText = botLogs.length === 0
       ? "No recent bot DB logs."
-      : botLogs.map((log) => `• ${log.status}: ${log.message}`).join("\n");
-    const harmonyLogsText = harmonyLogs.length === 0
-      ? "No recent Harmony health logs."
-      : harmonyLogs.map((log) => `• ${log.status} ${log.checkType}: ${log.message}`).join("\n");
-    const harmonyContext = await buildHarmonyContext();
+      : botLogs.map((log) => `â€¢ ${log.status}: ${log.message}`).join("\n");
 
     return [
       "BOT DATA SNAPSHOT (read-only aggregate data):",
-      `• Registered users: ${total(users)}`,
-      `• Access records: ${total(access)}`,
-      `• Products: ${total(products)}`,
-      `• Orders: ${total(orders)}`,
-      `• Recorded group messages: ${total(groups)}`,
-      `• Configured groups: ${total(groupSettings)}`,
-      `• Warnings: ${total(warnings)}`,
-      `• Blacklisted terms: ${total(blacklist)}`,
-      `• Meetings: ${total(meetings)}`,
-      `• Quota purchases: ${total(quotaPurchases)}`,
-      `• Quota accounts: ${total(quotaCredits)}`,
+      `â€¢ Registered users: ${total(users)}`,
+      `â€¢ Access records: ${total(access)}`,
+      `â€¢ Products: ${total(products)}`,
+      `â€¢ Orders: ${total(orders)}`,
+      `â€¢ Recorded group messages: ${total(groups)}`,
+      `â€¢ Configured groups: ${total(groupSettings)}`,
+      `â€¢ Warnings: ${total(warnings)}`,
+      `â€¢ Blacklisted terms: ${total(blacklist)}`,
+      `â€¢ Meetings: ${total(meetings)}`,
+      `â€¢ Quota purchases: ${total(quotaPurchases)}`,
+      `â€¢ Quota accounts: ${total(quotaCredits)}`,
       "RECENT BOT DB LOGS:",
       botLogsText,
-      "RECENT HARMONY HEALTH LOGS:",
-      harmonyLogsText,
-      harmonyContext,
     ].join("\n");
   } catch (err) {
     logger.warn({ err }, "Crescent could not build bot context");
-    return `BOT DATA SNAPSHOT: unavailable.\n${await buildHarmonyContext()}`;
+    return "BOT DATA SNAPSHOT: unavailable.";
   }
 }
 
-// ── System prompt ─────────────────────────────────────────────────────────────
+// â”€â”€ System prompt â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function buildSystemPrompt(ctx?: BotContext): Promise<string> {
   const shopCtx = await buildShopContext();
@@ -245,10 +181,10 @@ async function buildSystemPrompt(ctx?: BotContext): Promise<string> {
 PERSONALITY: Sharp, direct, intelligent, slightly futuristic. No fluff. You are a high-performance assistant.
 
 YOUR CAPABILITIES:
-1. GENERAL AI — Answer anything: research, writing, analysis, coding, math, advice.
-2. SHOP AGENT — Full awareness of the bot's product catalog and order history.
-3. GROUP ANALYST — You can analyse group conversations and report on user behaviour.
-4. TASK AGENT — You can instruct the bot to perform actions. When the user asks you to do something actionable (ban a user, broadcast a message, add a product), respond with a JSON action block at the END of your reply:
+1. GENERAL AI â€” Answer anything: research, writing, analysis, coding, math, advice.
+2. SHOP AGENT â€” Full awareness of the bot's product catalog and order history.
+3. GROUP ANALYST â€” You can analyse group conversations and report on user behaviour.
+4. TASK AGENT â€” You can instruct the bot to perform actions. When the user asks you to do something actionable (ban a user, broadcast a message, add a product), respond with a JSON action block at the END of your reply:
    \`\`\`action
    {"type":"broadcast","payload":{"message":"..."}}
    \`\`\`
@@ -261,13 +197,13 @@ FORMAT RULES:
 - Keep replies concise for Telegram mobile (max ~300 words unless asked for more)
 - Use *bold* and _italic_ markdown
 - For code, wrap in \`backticks\`
-- Never make up product prices, availability, delivery method, or order data — only use the live data above
+- Never make up product prices, availability, delivery method, or order data â€” only use the live data above
 - A product with stock 0 is intentionally unlimited availability, not out of stock
 - Digital products with auto-delivery content are available while they are active
 - Today: ${new Date().toLocaleDateString("en-KE", { timeZone: "Africa/Nairobi", weekday: "long", year: "numeric", month: "long", day: "numeric" })}`;
 }
 
-// ── Configured model router ────────────────────────────────────────────────────
+// â”€â”€ Configured model router â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function routeModel(
   task: TaskType,
@@ -287,7 +223,7 @@ function inferTask(input: string, ctx: BotContext): TaskType {
   return "chat";
 }
 
-// ── Agent action parser & executor ────────────────────────────────────────────
+// â”€â”€ Agent action parser & executor â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface AgentAction {
   type: "broadcast" | "ban_user" | "add_product" | "remove_product" | "send_dm";
@@ -306,46 +242,46 @@ function extractAction(reply: string): { clean: string; action: AgentAction | nu
 }
 
 async function executeAction(bot: MyBot, ownerId: number, action: AgentAction): Promise<string> {
-  if (!isOwner(ownerId)) return "⚠️ Agent actions are available to the bot owner only.";
+  if (!isOwner(ownerId)) return "âš ï¸ Agent actions are available to the bot owner only.";
 
   try {
     switch (action.type) {
       case "broadcast": {
         const msg = String(action.payload["message"] ?? "");
-        if (!msg) return "⚠️ Broadcast failed: no message.";
+        if (!msg) return "âš ï¸ Broadcast failed: no message.";
         const users = await db.select().from(usersTable).limit(500);
         let sent = 0;
         for (const u of users) {
-          try { await bot.api.sendMessage(u.id, `📢 *BROADCAST*\n\n${msg}`, { parse_mode: "Markdown" }); sent++; } catch { /* skip */ }
+          try { await bot.api.sendMessage(u.id, `ðŸ“¢ *BROADCAST*\n\n${msg}`, { parse_mode: "Markdown" }); sent++; } catch { /* skip */ }
           await new Promise((r) => setTimeout(r, 50));
         }
-        return `✅ Broadcast sent to ${sent} users.`;
+        return `âœ… Broadcast sent to ${sent} users.`;
       }
       case "send_dm": {
         const userId = Number(action.payload["userId"]);
         const msg = String(action.payload["message"] ?? "");
-        if (!userId || !msg) return "⚠️ DM failed: missing userId or message.";
+        if (!userId || !msg) return "âš ï¸ DM failed: missing userId or message.";
         await bot.api.sendMessage(userId, msg, { parse_mode: "Markdown" });
-        return `✅ DM sent to user ${userId}.`;
+        return `âœ… DM sent to user ${userId}.`;
       }
       case "add_product": {
         const name = String(action.payload["name"] ?? "");
         const price = String(action.payload["price"] ?? "0");
         const stock = String(action.payload["stock"] ?? "0");
         const category = String(action.payload["category"] ?? "general");
-        if (!name) return "⚠️ Product add failed: name required.";
+        if (!name) return "âš ï¸ Product add failed: name required.";
         await db.insert(productsTable).values({ name, price, stock, category, isActive: true });
-        return `✅ Product "${name}" added to shop.`;
+        return `âœ… Product "${name}" added to shop.`;
       }
       default:
-        return `⚠️ Unknown action type: ${action.type}`;
+        return `âš ï¸ Unknown action type: ${action.type}`;
     }
   } catch (err) {
-    return `❌ Action failed: ${err instanceof Error ? err.message : "unknown"}`;
+    return `âŒ Action failed: ${err instanceof Error ? err.message : "unknown"}`;
   }
 }
 
-// ── Persistent conversation memory ─────────────────────────────────────────────
+// â”€â”€ Persistent conversation memory â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 const activeHexagonUsers = new Set<number>();
 const seenHexagonUpdates = new Set<number>();
@@ -363,7 +299,7 @@ function wasAlreadyHandled(updateId: number): boolean {
   return false;
 }
 
-// ── Core ask ──────────────────────────────────────────────────────────────────
+// â”€â”€ Core ask â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function askHexagon(
   userId: number,
@@ -392,7 +328,7 @@ async function askHexagon(
   return { reply: clean, model, actionResult };
 }
 
-// ── Message split ─────────────────────────────────────────────────────────────
+// â”€â”€ Message split â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function split(text: string, max = 3900): string[] {
   const chunks: string[] = [];
@@ -406,31 +342,31 @@ function split(text: string, max = 3900): string[] {
   return chunks;
 }
 
-// ── Keyboards ─────────────────────────────────────────────────────────────────
+// â”€â”€ Keyboards â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function hexagonMenuKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
-    .text("💬 Chat", "hexagon:chat")
-    .text("🛍️ Shop Q&A", "hexagon:shop")
+    .text("ðŸ’¬ Chat", "hexagon:chat")
+    .text("ðŸ›ï¸ Shop Q&A", "hexagon:shop")
     .row()
-    .text("🕵️ Group Analyst", "hexagon:analyst")
-    .text("⚡ Agent Mode", "hexagon:agent")
+    .text("ðŸ•µï¸ Group Analyst", "hexagon:analyst")
+    .text("âš¡ Agent Mode", "hexagon:agent")
     .row()
-    .text("📊 Usage", "hexagon:usage")
-    .text("🧹 Clear", "hexagon:clear")
+    .text("ðŸ“Š Usage", "hexagon:usage")
+    .text("ðŸ§¹ Clear", "hexagon:clear")
     .row()
-    .text("🏠 Main Menu", "menu:main");
+    .text("ðŸ  Main Menu", "menu:main");
 }
 
 function quotaTopupKeyboard(): InlineKeyboard {
   const keyboard = new InlineKeyboard();
   if (process.env.CRYPTOBOT_API_TOKEN) {
-    keyboard.text(`💳 Buy +${CRESCENT_TOPUP_CREDITS} for $${CRESCENT_TOPUP_PRICE}`, "crescent:topup").row();
+    keyboard.text(`ðŸ’³ Buy +${CRESCENT_TOPUP_CREDITS} for $${CRESCENT_TOPUP_PRICE}`, "crescent:topup").row();
   }
-  return keyboard.text("🤖 Crescent", "menu:hexagon");
+  return keyboard.text("ðŸ¤– Crescent", "menu:hexagon");
 }
 
-// ── Public handler ────────────────────────────────────────────────────────────
+// â”€â”€ Public handler â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function handleHexagonMessage(ctx: BotContext, input: string): Promise<void> {
   const userId = ctx.from!.id;
@@ -438,7 +374,7 @@ export async function handleHexagonMessage(ctx: BotContext, input: string): Prom
   if (!(await checkCrescentAccess(ctx))) return;
 
   if (activeHexagonUsers.has(userId)) {
-    await ctx.reply("⏳ Crescent is still processing your previous request. Please wait for the response.");
+    await ctx.reply("â³ Crescent is still processing your previous request. Please wait for the response.");
     return;
   }
 
@@ -449,21 +385,21 @@ export async function handleHexagonMessage(ctx: BotContext, input: string): Prom
     try {
       quota = await consumeCrescentQuota(userId);
     } catch (quotaErr) {
-      // DB table may not exist yet — allow the request with unlimited access
-      logger.warn({ quotaErr }, "Quota check failed — allowing request");
+      // DB table may not exist yet â€” allow the request with unlimited access
+      logger.warn({ quotaErr }, "Quota check failed â€” allowing request");
       quota = { used: 0, limit: CRESCENT_DAILY_LIMIT, bonus: 0, allowed: true, unlimited: true };
     }
 
     if (!quota.allowed) {
       await ctx.reply(
-        `⛔ *Daily quota reached*\n━━━━━━━━━━━━━━━━━━\n\nYou've used ${quota.used}/${CRESCENT_DAILY_LIMIT} daily queries.\nYou have no bonus queries remaining.\n\nBuy ${CRESCENT_TOPUP_CREDITS} extra queries for $${CRESCENT_TOPUP_PRICE}.`,
+        `â›” *Daily quota reached*\nâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n\nYou've used ${quota.used}/${CRESCENT_DAILY_LIMIT} daily queries.\nYou have no bonus queries remaining.\n\nBuy ${CRESCENT_TOPUP_CREDITS} extra queries for $${CRESCENT_TOPUP_PRICE}.`,
         { parse_mode: "Markdown", reply_markup: quotaTopupKeyboard() }
       );
       return;
     }
 
     const quotaLabel = quota.unlimited ? "Unlimited" : formatCrescentQuota(quota);
-    const thinking = await ctx.reply(`🧠 _Crescent thinking... (${quotaLabel})_`, { parse_mode: "Markdown" });
+    const thinking = await ctx.reply(`ðŸ§  _Crescent thinking... (${quotaLabel})_`, { parse_mode: "Markdown" });
 
     try {
       const { reply, actionResult } = await askHexagon(userId, input, ctx, inferTask(input, ctx));
@@ -473,29 +409,29 @@ export async function handleHexagonMessage(ctx: BotContext, input: string): Prom
       for (let i = 0; i < chunks.length; i++) {
         const isLast = i === chunks.length - 1;
         await ctx.reply(
-          (i === 0 ? `🤖 *CRESCENT*\n━━━━━━━━━━━━━━━━━━\n\n` : "") + chunks[i],
+          (i === 0 ? `ðŸ¤– *CRESCENT*\nâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n\n` : "") + chunks[i],
           {
             parse_mode: "Markdown",
             reply_markup: isLast
-              ? new InlineKeyboard().text("💬 Continue", "hexagon:chat").text("🤖 Menu", "menu:hexagon")
+              ? new InlineKeyboard().text("ðŸ’¬ Continue", "hexagon:chat").text("ðŸ¤– Menu", "menu:hexagon")
               : undefined,
           }
         );
       }
 
       if (actionResult) {
-        await ctx.reply(`⚡ *Agent Result*\n━━━━━━━━━━━━━━━━━━\n\n${actionResult}`, { parse_mode: "Markdown" });
+        await ctx.reply(`âš¡ *Agent Result*\nâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n\n${actionResult}`, { parse_mode: "Markdown" });
       }
     } catch (err) {
       await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
-      await ctx.reply(`❌ *Crescent error*\n\n${err instanceof Error ? err.message : "Unknown error"}`, { parse_mode: "Markdown" });
+      await ctx.reply(`âŒ *Crescent error*\n\n${err instanceof Error ? err.message : "Unknown error"}`, { parse_mode: "Markdown" });
     }
   } finally {
     activeHexagonUsers.delete(userId);
   }
 }
 
-// ── Group message logger (call from bot message handler) ──────────────────────
+// â”€â”€ Group message logger (call from bot message handler) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function logGroupMessage(ctx: BotContext): Promise<void> {
   const message = ctx.message;
@@ -515,13 +451,13 @@ export async function logGroupMessage(ctx: BotContext): Promise<void> {
   } catch { /* non-critical */ }
 }
 
-// ── Group analyst ─────────────────────────────────────────────────────────────
+// â”€â”€ Group analyst â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 async function runGroupAnalysis(ctx: BotContext, bot: MyBot): Promise<void> {
   if (!(await mustBeGroup(ctx))) return;
 
   const chatId = ctx.chat!.id;
-  const thinking = await ctx.reply("🔍 _Analysing group activity..._", { parse_mode: "Markdown" });
+  const thinking = await ctx.reply("ðŸ” _Analysing group activity..._", { parse_mode: "Markdown" });
 
   try {
     const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -538,7 +474,7 @@ async function runGroupAnalysis(ctx: BotContext, bot: MyBot): Promise<void> {
 
     if (messages.length < 5) {
       await ctx.api.deleteMessage(chatId, thinking.message_id).catch(() => {});
-      await ctx.reply("📊 Not enough live group messages recorded yet.\n\n_I need at least 5 messages from this group. Make sure the bot is an admin and that Telegram privacy mode is disabled in BotFather so it can receive normal group conversations._", { parse_mode: "Markdown" });
+      await ctx.reply("ðŸ“Š Not enough live group messages recorded yet.\n\n_I need at least 5 messages from this group. Make sure the bot is an admin and that Telegram privacy mode is disabled in BotFather so it can receive normal group conversations._", { parse_mode: "Markdown" });
       return;
     }
 
@@ -550,12 +486,12 @@ async function runGroupAnalysis(ctx: BotContext, bot: MyBot): Promise<void> {
       {
         role: "system",
         content: `You are CRESCENT, an expert group behaviour analyst and Bot-Command-Central operations analyst. Analyse the Telegram group and the bot snapshot provided below. Provide:
-1. GROUP ACTIVITY — total messages, active users, peak times, and conversation themes
-2. USER PROFILES — brief behaviour profile for each active user (tone, topics, activity level)
-3. SENTIMENT — overall group mood
-4. RED FLAGS — suspicious, spammy, or toxic patterns, clearly separating evidence from uncertainty
-5. BOT OVERVIEW — explain what the bot's data and connected Harmony DB indicate about usage, health, and configuration
-6. RECOMMENDATIONS — concrete actions for the admin
+1. GROUP ACTIVITY â€” total messages, active users, peak times, and conversation themes
+2. USER PROFILES â€” brief behaviour profile for each active user (tone, topics, activity level)
+3. SENTIMENT â€” overall group mood
+4. RED FLAGS â€” suspicious, spammy, or toxic patterns, clearly separating evidence from uncertainty
+5. BOT OVERVIEW â€” explain what the bot's data and connected Harmony DB indicate about usage, health, and configuration
+6. RECOMMENDATIONS â€” concrete actions for the admin
 
 Use only the supplied data. Do not invent records, credentials, or database contents. Treat database metadata and logs as read-only context. Be concise, sharp, and insightful. Today: ${new Date().toDateString()}
 
@@ -566,7 +502,7 @@ ${botContext}`
 
     await ctx.api.deleteMessage(chatId, thinking.message_id).catch(() => {});
 
-    const header = `📊 GROUP + BOT ANALYSIS REPORT\n━━━━━━━━━━━━━━━━━━\nLatest live window · ${messages.length} messages · ${new Set(messages.map((m) => m.userId)).size} users`;
+    const header = `ðŸ“Š GROUP + BOT ANALYSIS REPORT\nâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\nLatest live window Â· ${messages.length} messages Â· ${new Set(messages.map((m) => m.userId)).size} users`;
     const chunks = split(`${header}\n\n${reply}`);
     for (const chunk of chunks) {
       await ctx.reply(chunk);
@@ -574,11 +510,11 @@ ${botContext}`
   } catch (err) {
     logger.error({ err, chatId }, "Group analysis failed");
     await ctx.api.deleteMessage(chatId, thinking.message_id).catch(() => {});
-    await ctx.reply(`❌ Analysis failed: ${err instanceof Error ? err.message : "Unknown"}`);
+    await ctx.reply(`âŒ Analysis failed: ${err instanceof Error ? err.message : "Unknown"}`);
   }
 }
 
-// ── Daily group digest (called by cron) ──────────────────────────────────────
+// â”€â”€ Daily group digest (called by cron) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function sendDailyGroupDigest(bot: MyBot, chatId: number, ownerId: number): Promise<void> {
   try {
@@ -600,11 +536,11 @@ export async function sendDailyGroupDigest(bot: MyBot, chatId: number, ownerId: 
 
     const top = Array.from(byUser.entries()).sort((a, b) => b[1].count - a[1].count).slice(0, 5);
 
-    const digest = `📊 *DAILY GROUP DIGEST*\n━━━━━━━━━━━━━━━━━━\n_${new Date().toDateString()}_\n\n` +
-      `📨 Total messages: *${messages.length}*\n` +
-      `👥 Active users: *${byUser.size}*\n\n` +
-      `🏆 *Top Contributors*\n` +
-      top.map(([, v], i) => `${i + 1}. ${v.name} — ${v.count} msgs`).join("\n");
+    const digest = `ðŸ“Š *DAILY GROUP DIGEST*\nâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n_${new Date().toDateString()}_\n\n` +
+      `ðŸ“¨ Total messages: *${messages.length}*\n` +
+      `ðŸ‘¥ Active users: *${byUser.size}*\n\n` +
+      `ðŸ† *Top Contributors*\n` +
+      top.map(([, v], i) => `${i + 1}. ${v.name} â€” ${v.count} msgs`).join("\n");
 
     await bot.api.sendMessage(ownerId, digest, { parse_mode: "Markdown" });
   } catch (err) {
@@ -612,7 +548,7 @@ export async function sendDailyGroupDigest(bot: MyBot, chatId: number, ownerId: 
   }
 }
 
-// ── Register ──────────────────────────────────────────────────────────────────
+// â”€â”€ Register â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export function registerHexagonHandlers(bot: MyBot): void {
   bot.command("crescent", async (ctx) => {
@@ -622,7 +558,7 @@ export function registerHexagonHandlers(bot: MyBot): void {
       const quota = await getCrescentQuotaStatus(ctx.from.id);
       const quotaText = quota.unlimited ? "Unlimited" : formatCrescentQuota(quota);
       await ctx.reply(
-        `🤖 *CRESCENT AI AGENT*\n━━━━━━━━━━━━━━━━━━\n\n_Elite AI · Shop-aware · Group analyst · Task agent_\n\n📊 Quota: *${quotaText}*\n\nAsk me anything or use the menu:`,
+        `ðŸ¤– *CRESCENT AI AGENT*\nâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n\n_Elite AI Â· Shop-aware Â· Group analyst Â· Task agent_\n\nðŸ“Š Quota: *${quotaText}*\n\nAsk me anything or use the menu:`,
         { parse_mode: "Markdown", reply_markup: hexagonMenuKeyboard() }
       );
       return;
@@ -640,7 +576,7 @@ export function registerHexagonHandlers(bot: MyBot): void {
   bot.command("clearai", async (ctx) => {
     if (!ctx.from || !(await checkCrescentAccess(ctx))) return;
     await clearMemory(ctx.from.id);
-    await ctx.reply("🧹 Crescent memory cleared.");
+    await ctx.reply("ðŸ§¹ Crescent memory cleared.");
   });
 
   bot.command("analyse", async (ctx) => {
@@ -651,25 +587,25 @@ export function registerHexagonHandlers(bot: MyBot): void {
 
 export function registerHexagonCallbacks(bot: MyBot): void {
   bot.callbackQuery("menu:hexagon", async (ctx) => {
-    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery("â›”"); return; }
     await ctx.answerCallbackQuery();
     const quota = await getCrescentQuotaStatus(ctx.from.id);
     const quotaText = quota.unlimited ? "Unlimited" : formatCrescentQuota(quota);
     await ctx.editMessageText(
-      `🤖 *CRESCENT AI AGENT*\n━━━━━━━━━━━━━━━━━━\n\n_Elite AI · Shop-aware · Group analyst · Task agent_\n\n📊 Quota: *${quotaText}*\n\nAsk me anything or use the menu:`,
+      `ðŸ¤– *CRESCENT AI AGENT*\nâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n\n_Elite AI Â· Shop-aware Â· Group analyst Â· Task agent_\n\nðŸ“Š Quota: *${quotaText}*\n\nAsk me anything or use the menu:`,
       { parse_mode: "Markdown", reply_markup: hexagonMenuKeyboard() }
     );
   });
 
   bot.callbackQuery("crescent:topup", async (ctx) => {
-    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery("â›”"); return; }
     if (!process.env.CRYPTOBOT_API_TOKEN) {
       await ctx.answerCallbackQuery("Payments are not configured.");
-      await ctx.reply("⚠️ Crypto payments are not configured yet. Please contact the owner.");
+      await ctx.reply("âš ï¸ Crypto payments are not configured yet. Please contact the owner.");
       return;
     }
 
-    await ctx.answerCallbackQuery("⏳ Creating payment...");
+    await ctx.answerCallbackQuery("â³ Creating payment...");
     const userId = ctx.from.id;
     const asset: CryptoBotAsset = "USDT";
     const purchase = await createCrescentQuotaPurchase(userId, asset);
@@ -684,80 +620,80 @@ export function registerHexagonCallbacks(bot: MyBot): void {
       });
       await attachCrescentQuotaInvoice(purchase.id, invoice.invoice_id);
       await ctx.editMessageText(
-        `💳 *CRESCENT QUOTA TOP-UP*\n━━━━━━━━━━━━━━━━━━\n\n` +
+        `ðŸ’³ *CRESCENT QUOTA TOP-UP*\nâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n\n` +
           `Add *${CRESCENT_TOPUP_CREDITS} queries* for *$${CRESCENT_TOPUP_PRICE} USD*\n` +
           `Payment asset: *${asset}*\n\n` +
           `Your bonus queries are added automatically after CryptoBot confirms payment.`,
         {
           parse_mode: "Markdown",
           reply_markup: new InlineKeyboard()
-            .url("💳 Pay with CryptoBot", invoice.bot_invoice_url)
+            .url("ðŸ’³ Pay with CryptoBot", invoice.bot_invoice_url)
             .row()
-            .text("🤖 Crescent", "menu:hexagon"),
+            .text("ðŸ¤– Crescent", "menu:hexagon"),
         },
       );
     } catch (err) {
       logger.error({ err, purchaseId: purchase.id }, "Crescent quota invoice creation failed");
-      await ctx.editMessageText("❌ Could not create the quota payment. Please try again later.", {
-        reply_markup: new InlineKeyboard().text("🤖 Crescent", "menu:hexagon"),
+      await ctx.editMessageText("âŒ Could not create the quota payment. Please try again later.", {
+        reply_markup: new InlineKeyboard().text("ðŸ¤– Crescent", "menu:hexagon"),
       });
     }
   });
 
   bot.callbackQuery("hexagon:chat", async (ctx) => {
-    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery("â›”"); return; }
     ctx.session.pendingAction = "hexagon:input";
     await ctx.answerCallbackQuery();
-    await ctx.reply("💬 *Chat with Crescent*\n\nType your message:", { parse_mode: "Markdown" });
+    await ctx.reply("ðŸ’¬ *Chat with Crescent*\n\nType your message:", { parse_mode: "Markdown" });
   });
 
   bot.callbackQuery("hexagon:shop", async (ctx) => {
-    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery("â›”"); return; }
     ctx.session.pendingAction = "hexagon:input";
     await ctx.answerCallbackQuery();
-    await ctx.reply("🛍️ *Shop Q&A*\n\nAsk about products, orders, pricing, or stock:\n\n_e.g. \"Which products are low on stock?\" or \"Summarise today's orders\"_", { parse_mode: "Markdown" });
+    await ctx.reply("ðŸ›ï¸ *Shop Q&A*\n\nAsk about products, orders, pricing, or stock:\n\n_e.g. \"Which products are low on stock?\" or \"Summarise today's orders\"_", { parse_mode: "Markdown" });
   });
 
   bot.callbackQuery("hexagon:agent", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("â›”"); return; }
     ctx.session.pendingAction = "hexagon:input";
     await ctx.answerCallbackQuery();
     await ctx.reply(
-      `⚡ *AGENT MODE*\n━━━━━━━━━━━━━━━━━━\n\nI can perform live tasks. Try:\n\n• _"Broadcast: Shop is closed today"_\n• _"Add product: VPN 1 month, $5, category: digital, stock: 100"_\n• _"DM user 123456 saying their order is ready"_\n\nType your instruction:`,
+      `âš¡ *AGENT MODE*\nâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n\nI can perform live tasks. Try:\n\nâ€¢ _"Broadcast: Shop is closed today"_\nâ€¢ _"Add product: VPN 1 month, $5, category: digital, stock: 100"_\nâ€¢ _"DM user 123456 saying their order is ready"_\n\nType your instruction:`,
       { parse_mode: "Markdown" }
     );
   });
 
   bot.callbackQuery("hexagon:analyst", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
-    await ctx.answerCallbackQuery("🔍 Analysing...");
+    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("â›”"); return; }
+    await ctx.answerCallbackQuery("ðŸ” Analysing...");
     await runGroupAnalysis(ctx, bot);
   });
 
   bot.callbackQuery("hexagon:usage", async (ctx) => {
-    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery("⛔"); return; }
+    if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery("â›”"); return; }
     await ctx.answerCallbackQuery();
     const quota = await getCrescentQuotaStatus(ctx.from.id);
     const quotaText = quota.unlimited ? "Unlimited" : formatCrescentQuota(quota);
-    const bar = quota.unlimited ? "██████████" : "█".repeat(Math.min(10, Math.round((quota.used / quota.limit) * 10))) + "░".repeat(Math.max(0, 10 - Math.round((quota.used / quota.limit) * 10)));
+    const bar = quota.unlimited ? "â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆ" : "â–ˆ".repeat(Math.min(10, Math.round((quota.used / quota.limit) * 10))) + "â–‘".repeat(Math.max(0, 10 - Math.round((quota.used / quota.limit) * 10)));
     await ctx.editMessageText(
-      `📊 *CRESCENT USAGE*\n━━━━━━━━━━━━━━━━━━\n\n${bar}\n*${quotaText}*\n\n_Resets midnight Nairobi time_\n_Chat route: ${configuredModelCount("chat")} configured models · Analysis route: ${configuredModelCount("analysis")} configured models_`,
-      { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🔙 Back", "menu:hexagon") }
+      `ðŸ“Š *CRESCENT USAGE*\nâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n\n${bar}\n*${quotaText}*\n\n_Resets midnight Nairobi time_\n_Chat route: ${configuredModelCount("chat")} configured models Â· Analysis route: ${configuredModelCount("analysis")} configured models_`,
+      { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("ðŸ”™ Back", "menu:hexagon") }
     );
   });
 
   bot.callbackQuery("hexagon:clear", async (ctx) => {
     if (!ctx.from || !(await checkCrescentAccess(ctx))) { await ctx.answerCallbackQuery(); return; }
     await clearMemory(ctx.from.id);
-    await ctx.answerCallbackQuery("🧹 Cleared");
+    await ctx.answerCallbackQuery("ðŸ§¹ Cleared");
     await ctx.editMessageText(
-      `🤖 *CRESCENT*\n━━━━━━━━━━━━━━━━━━\n\n🧹 Memory cleared. Fresh start!`,
+      `ðŸ¤– *CRESCENT*\nâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n\nðŸ§¹ Memory cleared. Fresh start!`,
       { parse_mode: "Markdown", reply_markup: hexagonMenuKeyboard() }
     );
   });
 }
 
-// ── Reminders (exported for reminders.ts) ─────────────────────────────────────
+// â”€â”€ Reminders (exported for reminders.ts) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 interface Reminder { id: string; userId: number; label: string; fireAt: Date; timer: ReturnType<typeof setTimeout>; }
 const reminders = new Map<string, Reminder>();
@@ -768,7 +704,7 @@ export function scheduleReminder(bot: MyBot, userId: number, label: string, fire
   if (delay <= 0) return "";
   const timer = setTimeout(async () => {
     reminders.delete(id);
-    await bot.api.sendMessage(userId, `⏰ *REMINDER*\n\n${label}`, { parse_mode: "Markdown" }).catch(() => {});
+    await bot.api.sendMessage(userId, `â° *REMINDER*\n\n${label}`, { parse_mode: "Markdown" }).catch(() => {});
   }, delay);
   reminders.set(id, { id, userId, label, fireAt, timer });
   return id;
@@ -782,7 +718,7 @@ export function clearAllReminders(userId: number): number {
   return count;
 }
 
-// ── Daily digest (exported for reminders.ts & cron) ──────────────────────────
+// â”€â”€ Daily digest (exported for reminders.ts & cron) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export async function sendDailyDigest(userId: number, bot: MyBot): Promise<void> {
   try {
@@ -790,13 +726,13 @@ export async function sendDailyDigest(userId: number, bot: MyBot): Promise<void>
     const lowStock = products.filter((p) => Number(p.stock) <= 5 && Number(p.stock) > 0);
     const now = new Date();
 
-    let digest = `🌅 *GOOD MORNING — DAILY DIGEST*\n━━━━━━━━━━━━━━━━━━━━\n`;
-    digest += `📅 ${now.toLocaleDateString("en-KE", { timeZone: "Africa/Nairobi", weekday: "long", month: "long", day: "numeric" })}\n\n`;
-    digest += `🛍️ *SHOP SNAPSHOT*\n• Active products: ${products.length}\n`;
-    if (lowStock.length > 0) digest += `• ⚠️ Low stock: ${lowStock.map((p) => p.name).join(", ")}\n`;
+    let digest = `ðŸŒ… *GOOD MORNING â€” DAILY DIGEST*\nâ”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”â”\n`;
+    digest += `ðŸ“… ${now.toLocaleDateString("en-KE", { timeZone: "Africa/Nairobi", weekday: "long", month: "long", day: "numeric" })}\n\n`;
+    digest += `ðŸ›ï¸ *SHOP SNAPSHOT*\nâ€¢ Active products: ${products.length}\n`;
+    if (lowStock.length > 0) digest += `â€¢ âš ï¸ Low stock: ${lowStock.map((p) => p.name).join(", ")}\n`;
 
     const quota = await getCrescentQuotaStatus(userId);
-    digest += `\n🤖 *CRESCENT AI*\n• Quota: ${quota.unlimited ? "Unlimited" : formatCrescentQuota(quota)}\n`;
+    digest += `\nðŸ¤– *CRESCENT AI*\nâ€¢ Quota: ${quota.unlimited ? "Unlimited" : formatCrescentQuota(quota)}\n`;
     digest += `\n_Have a productive day! /crescent to chat._`;
 
     await bot.api.sendMessage(userId, digest, { parse_mode: "Markdown" });
@@ -805,6 +741,6 @@ export async function sendDailyDigest(userId: number, bot: MyBot): Promise<void>
   }
 }
 
-// ── askHexagon export (for email.ts) ─────────────────────────────────────────
+// â”€â”€ askHexagon export (for email.ts) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 export { askHexagon };
