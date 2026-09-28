@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { markExternalBackup } from "../bot/handlers/extdblogs";
+import { db, externalDbLogsTable } from "@workspace/db";
 import { logger } from "../lib/logger";
 import nodemailer from "nodemailer";
 
@@ -36,7 +36,15 @@ router.post("/extdb/backup", async (req, res) => {
       return res.status(401).json({ error: "unauthorized" });
     }
     const { details, reporter } = req.body || {};
-    await markExternalBackup(details, reporter);
+    const date = new Date();
+    const formattedDate = `${String(date.getDate()).padStart(2, "0")}-${String(date.getMonth() + 1).padStart(2, "0")}-${date.getFullYear()}`;
+    await db.insert(externalDbLogsTable).values({
+      site: "Harmony",
+      checkType: "backup",
+      status: "success",
+      message: `Today, ${formattedDate} backup successful...`,
+      details: reporter ? `Reported by: ${reporter}${details ? ` — ${details}` : ""}` : (details ?? null),
+    });
     await sendEmail(
       `✅ Harmony DB — Backup Reported`,
       `A backup was reported on ${new Date().toISOString()}.\nDetails: ${details ?? "-"}\nReporter: ${reporter ?? "-"}`
