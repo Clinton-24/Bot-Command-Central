@@ -1,18 +1,18 @@
 /**
  * Reminders + email secretary + daily morning briefing
- * • /remind — persistent DB reminders
- * • /reminders — list pending
- * • /inbox — Gmail scan + AI vital summary
- * • /digest — full morning briefing (manual)
- * • Daily 10:00 Africa/Nairobi — automatic full briefing
- * • Every 2 hours — status ping
+ * • /remind /reminders /digest — available to all approved users
+ * • /inbox — owner only (shared Gmail connection)
+ * • Daily 10:00 Africa/Nairobi — briefing to every approved user
+ * • Every 2 hours — owner status ping
  */
 
 import { InlineKeyboard } from "grammy";
-import { eq } from "drizzle-orm";
-import { pool, db, productsTable, meetingsTable } from "@workspace/db";
+import { and, eq, ne } from "drizzle-orm";
+import { pool, db, productsTable, meetingsTable, accessTable } from "@workspace/db";
 import type { MyBot } from "../index";
+import type { BotContext } from "../context";
 import { isOwner } from "../helpers";
+import { checkAccess } from "./access";
 import { logger } from "../../lib/logger";
 import { routeChat } from "../../lib/model-router";
 import {
@@ -44,7 +44,6 @@ function parseDelay(input: string): number | null {
   return null;
 }
 
-/** Milliseconds until next HH:MM in Africa/Nairobi. */
 function msUntilNextNairobiTime(hour: number, minute = 0): number {
   const now = new Date();
   const parts = new Intl.DateTimeFormat("en-GB", {
@@ -65,13 +64,33 @@ function msUntilNextNairobiTime(hour: number, minute = 0): number {
   const mi = Number(get("minute"));
   const s = Number(get("second"));
 
-  // Approximate "now" as Nairobi wall-clock encoded in UTC date object
   const nowNairobiAsUtc = Date.UTC(y, mo - 1, d, h, mi, s);
   let targetNairobiAsUtc = Date.UTC(y, mo - 1, d, hour, minute, 0);
   if (targetNairobiAsUtc <= nowNairobiAsUtc) {
     targetNairobiAsUtc += 24 * 60 * 60 * 1000;
   }
   return targetNairobiAsUtc - nowNairobiAsUtc;
+}
+
+/** Approved users + owner who should receive the daily briefing. */
+async function listBriefingRecipients(): Promise<number[]> {
+  const ids = new Set<number>();
+  const ownerId = parseInt(process.env["BOT_OWNER_ID"] ?? "0", 10);
+  if (ownerId) ids.add(ownerId);
+
+  try {
+    const rows = await db
+      .select({ userId: accessTable.userId })
+      .from(accessTable)
+      .where(and(eq(accessTable.isApproved, true), ne(accessTable.tier, "blocked")));
+    for (const r of rows) {
+      const id = Number(r.userId);
+      if (id) ids.add(id);
+    }
+  } catch (err) {
+    logger.warn({ err }, "listBriefingRecipients failed");
+  }
+  return [...ids];
 }
 
 export async function createReminder(
@@ -137,7 +156,7 @@ export async function buildEmailBriefing(): Promise<string> {
   if (!isGmailConfigured()) {
     return (
       "📧 *Email not connected*\n\n" +
-      "Set on Render: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`"
+      "Owner: set on Render `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`"
     );
   }
 
@@ -170,8 +189,12 @@ export async function buildEmailBriefing(): Promise<string> {
   }
 }
 
-/** Full secretary briefing: date, calendar/meetings, reminders, emails, shop, actions. */
-export async function sendMorningBriefing(userId: number, bot: MyBot): Promise<void> {
+export async function sendMorningBriefing(
+  userId: number,
+  bot: MyBot,
+  options?: { includeEmail?: boolean },
+): Promise<void> {
+  const includeEmail = options?.includeEmail ?? isOwner(userId);
   const now = new Date();
   const dateLine = now.toLocaleDateString("en-KE", {
     timeZone: "Africa/Nairobi",
@@ -186,16 +209,14 @@ export async function sendMorningBriefing(userId: number, bot: MyBot): Promise<v
     `━━━━━━━━━━━━━━━━━━\n` +
     `_10:00 Africa/Nairobi_\n\n`;
 
-  // ── Calendar / meetings (today, Nairobi) ──
+  // Calendar
   try {
     const meetings = await db.select().from(meetingsTable).limit(20);
-    const todayStr = now.toLocaleDateString("en-CA", { timeZone: "Africa/Nairobi" }); // YYYY-MM-DD
+    const todayStr = now.toLocaleDateString("en-CA", { timeZone: "Africa/Nairobi" });
     const todayMeetings = meetings.filter((m: any) => {
       const raw = m.scheduledAt ?? m.startsAt ?? m.date ?? m.meetingAt;
       if (!raw) return false;
-      const d = new Date(raw);
-      const s = d.toLocaleDateString("en-CA", { timeZone: "Africa/Nairobi" });
-      return s === todayStr;
+      return new Date(raw).toLocaleDateString("en-CA", { timeZone: "Africa/Nairobi" }) === todayStr;
     });
     text += `📅 *Calendar*\n`;
     if (todayMeetings.length === 0) {
@@ -213,12 +234,12 @@ export async function sendMorningBriefing(userId: number, bot: MyBot): Promise<v
     text += `📅 *Calendar*\n_(unavailable)_\n\n`;
   }
 
-  // ── Pending reminders ──
+  // Personal reminders
   try {
     const pending = await listPendingReminders(userId);
-    text += `⏰ *Reminders* (${pending.length} pending)\n`;
+    text += `⏰ *Your reminders* (${pending.length} pending)\n`;
     if (pending.length === 0) {
-      text += `None queued.\n\n`;
+      text += `None queued. Use /remind 2h message\n\n`;
     } else {
       for (const r of pending.slice(0, 8)) {
         const when = new Date(r.fire_at).toLocaleString("en-KE", {
@@ -236,79 +257,75 @@ export async function sendMorningBriefing(userId: number, bot: MyBot): Promise<v
     logger.warn({ err }, "briefing reminders failed");
   }
 
-  // ── Emails ──
-  try {
-    if (isGmailConfigured()) {
-      const emails = await fetchRecentEmails({ maxResults: 18 });
-      text += `📧 *Inbox* (${emails.length} recent primary)\n`;
-      if (emails.length === 0) {
-        text += `Quiet — no primary mail in last 2 days.\n\n`;
-      } else {
-        const block = formatEmailsForPrompt(emails);
-        try {
-          const ai = await routeChat("analysis", [
-            {
-              role: "system",
-              content:
-                "You are an executive secretary writing the email section of a morning briefing. " +
-                "Use Telegram Markdown. Sections: 🔴 Worth a look / 🚨 Action required / Low priority. " +
-                "Be concise (max 280 words). Never invent emails.",
-            },
-            { role: "user", content: block },
-          ]);
-          text += `${ai.reply}\n\n`;
-        } catch {
-          for (const e of emails.slice(0, 5)) {
-            text += `• ${e.subject} — _${e.from}_\n`;
+  // Email (owner / opted-in only — shared Gmail)
+  if (includeEmail) {
+    try {
+      if (isGmailConfigured()) {
+        const emails = await fetchRecentEmails({ maxResults: 18 });
+        text += `📧 *Inbox* (${emails.length} recent primary)\n`;
+        if (emails.length === 0) {
+          text += `Quiet — no primary mail in last 2 days.\n\n`;
+        } else {
+          const block = formatEmailsForPrompt(emails);
+          try {
+            const ai = await routeChat("analysis", [
+              {
+                role: "system",
+                content:
+                  "You are an executive secretary writing the email section of a morning briefing. " +
+                  "Use Telegram Markdown. Sections: 🔴 Worth a look / 🚨 Action required / Low priority. " +
+                  "Be concise (max 280 words). Never invent emails.",
+              },
+              { role: "user", content: block },
+            ]);
+            text += `${ai.reply}\n\n`;
+          } catch {
+            for (const e of emails.slice(0, 5)) {
+              text += `• ${e.subject} — _${e.from}_\n`;
+            }
+            text += `\n`;
           }
-          text += `\n`;
         }
+      } else {
+        text += `📧 *Inbox*\n_Not connected — set Gmail env vars on Render_\n\n`;
       }
-    } else {
-      text += `📧 *Inbox*\n_Not connected — set Gmail env vars on Render_\n\n`;
+    } catch (err) {
+      logger.warn({ err }, "briefing email section failed");
+      text += `📧 *Inbox*\n_Scan failed_\n\n`;
     }
-  } catch (err) {
-    logger.warn({ err }, "briefing email section failed");
-    text += `📧 *Inbox*\n_Scan failed_\n\n`;
   }
 
-  // ── Shop snapshot ──
+  // Shop / low stock
   try {
     const products = await db.select().from(productsTable).where(eq(productsTable.isActive, true));
     const lowStock = products.filter((p) => Number(p.stock) <= 5 && Number(p.stock) >= 0);
     text += `🛍️ *Shop*\n• Active products: ${products.length}\n`;
     if (lowStock.length > 0) {
-      text += `• ⚠️ Low stock: ${lowStock.map((p) => p.name).join(", ")}\n`;
+      text += `• ⚠️ Low stock (LS): ${lowStock.map((p) => p.name).join(", ")}\n`;
     }
     text += `\n`;
   } catch (err) {
     logger.warn({ err }, "briefing shop section failed");
   }
 
-  // ── Suggested focus ──
   text += `🎯 *Suggested focus*\n`;
-  text += `• Review action-required emails (/inbox)\n`;
-  text += `• Clear or reschedule pending reminders (/reminders)\n`;
-  text += `• Check shop stock if low-stock items listed\n`;
-  text += `\n_Manual run: /digest · /inbox · /reminders_`;
+  text += `• Review your reminders (/reminders)\n`;
+  if (includeEmail) text += `• Handle action-required emails (/inbox)\n`;
+  text += `• Check shop if low-stock items are listed\n`;
+  text += `\n_Commands: /digest · /remind · /reminders` + (includeEmail ? " · /inbox" : "") + `_`;
 
-  // Telegram message limit ~4096
   if (text.length > 4000) text = text.slice(0, 3990) + "\n…";
-
   await bot.api.sendMessage(userId, text, { parse_mode: "Markdown" });
 }
 
-/** @deprecated alias used by older imports */
 export async function sendDailyDigest(userId: number, bot: MyBot): Promise<void> {
-  await sendMorningBriefing(userId, bot);
+  await sendMorningBriefing(userId, bot, { includeEmail: isOwner(userId) });
 }
 
 export function registerReminderHandlers(bot: MyBot): void {
   bot.command("remind", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) {
-      await ctx.reply("⛔ Reminders are owner-only.");
-      return;
-    }
+    if (!ctx.from) return;
+    if (!(await checkAccess(ctx, "free"))) return;
 
     const args = ctx.match?.trim() ?? "";
     const parts = args.match(/^(\S+)\s+(.+)$/s);
@@ -320,8 +337,8 @@ export function registerReminderHandlers(bot: MyBot): void {
           `• /remind 30m Check emails\n` +
           `• /remind 2h Team call at 3pm\n` +
           `• /remind 1d Review monthly report\n\n` +
-          `Daily briefing: *10:00 Nairobi* auto\n` +
-          `Also: /inbox · /reminders · /digest`,
+          `Daily briefing: *10:00 Nairobi* (all approved users)\n` +
+          `Also: /reminders · /digest`,
         { parse_mode: "Markdown" },
       );
       return;
@@ -357,26 +374,20 @@ export function registerReminderHandlers(bot: MyBot): void {
       `⏰ *Reminder Set!* (#${id})\n━━━━━━━━━━━━━━━━━━\n\n📌 ${label}\n🕐 ${when} (Nairobi)`,
       {
         parse_mode: "Markdown",
-        reply_markup: new InlineKeyboard()
-          .text("⏰ My Reminders", "reminders:list")
-          .text("📧 Inbox", "reminders:inbox"),
+        reply_markup: new InlineKeyboard().text("⏰ My Reminders", "reminders:list"),
       },
     );
   });
 
   bot.command("reminders", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) {
-      await ctx.reply("⛔ Owner only.");
-      return;
-    }
+    if (!ctx.from) return;
+    if (!(await checkAccess(ctx, "free"))) return;
+
     const rows = await listPendingReminders(ctx.from.id);
     if (rows.length === 0) {
       await ctx.reply(
         `⏰ *No pending reminders*\n\nSet one with:\n/remind 2h Check the inbox`,
-        {
-          parse_mode: "Markdown",
-          reply_markup: new InlineKeyboard().text("📧 Scan inbox", "reminders:inbox"),
-        },
+        { parse_mode: "Markdown" },
       );
       return;
     }
@@ -394,15 +405,17 @@ export function registerReminderHandlers(bot: MyBot): void {
       .join("\n\n");
     await ctx.reply(`⏰ *Pending reminders* (${rows.length})\n━━━━━━━━━━━━━━━━━━\n\n${lines}`, {
       parse_mode: "Markdown",
-      reply_markup: new InlineKeyboard()
-        .text("🗑️ Clear all", "reminders:clear_all")
-        .text("📧 Inbox", "reminders:inbox"),
+      reply_markup: new InlineKeyboard().text("🗑️ Clear all", "reminders:clear_all"),
     });
   });
 
   bot.command("inbox", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) {
-      await ctx.reply("⛔ Owner only.");
+    if (!ctx.from) return;
+    if (!isOwner(ctx.from.id)) {
+      await ctx.reply(
+        "📧 *Inbox is owner-only*\n\nThe connected Gmail mailbox is the owner's.\nYou still get daily briefings (reminders + shop) via /digest.",
+        { parse_mode: "Markdown" },
+      );
       return;
     }
     const thinking = await ctx.reply("📧 _Scanning inbox..._", { parse_mode: "Markdown" });
@@ -418,8 +431,9 @@ export function registerReminderHandlers(bot: MyBot): void {
   });
 
   bot.callbackQuery("reminders:list", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) {
-      await ctx.answerCallbackQuery("⛔");
+    if (!ctx.from) return;
+    if (!(await checkAccess(ctx, "free"))) {
+      await ctx.answerCallbackQuery("Access required");
       return;
     }
     await ctx.answerCallbackQuery();
@@ -435,8 +449,9 @@ export function registerReminderHandlers(bot: MyBot): void {
   });
 
   bot.callbackQuery("reminders:inbox", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) {
-      await ctx.answerCallbackQuery("⛔");
+    if (!ctx.from) return;
+    if (!isOwner(ctx.from.id)) {
+      await ctx.answerCallbackQuery("Owner only");
       return;
     }
     await ctx.answerCallbackQuery();
@@ -452,8 +467,9 @@ export function registerReminderHandlers(bot: MyBot): void {
   });
 
   bot.callbackQuery("reminders:clear_all", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) {
-      await ctx.answerCallbackQuery("⛔ Owner only.");
+    if (!ctx.from) return;
+    if (!(await checkAccess(ctx, "free"))) {
+      await ctx.answerCallbackQuery("Access required");
       return;
     }
     const n = await clearPendingReminders(ctx.from.id);
@@ -465,13 +481,12 @@ export function registerReminderHandlers(bot: MyBot): void {
   });
 
   bot.command("digest", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) {
-      await ctx.reply("⛔ Owner only.");
-      return;
-    }
+    if (!ctx.from) return;
+    if (!(await checkAccess(ctx, "free"))) return;
+
     const thinking = await ctx.reply("☀️ _Building morning briefing..._", { parse_mode: "Markdown" });
     try {
-      await sendMorningBriefing(ctx.from.id, bot);
+      await sendMorningBriefing(ctx.from.id, bot, { includeEmail: isOwner(ctx.from.id) });
       await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
     } catch (err) {
       logger.error({ err }, "manual digest failed");
@@ -483,21 +498,23 @@ export function registerReminderHandlers(bot: MyBot): void {
 
 let dailyDigestTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** Schedule full morning briefing every day at 10:00 Africa/Nairobi. */
+/** 10:00 Africa/Nairobi — briefing to every approved user (+ owner). */
 export function startDailyDigestScheduler(bot: MyBot): void {
-  const ownerId = parseInt(process.env["BOT_OWNER_ID"] ?? "0", 10);
-  if (!ownerId) {
-    logger.warn("BOT_OWNER_ID not set — daily briefing disabled");
-    return;
-  }
-
   function scheduleNext(): void {
     const delay = msUntilNextNairobiTime(10, 0);
     const nextAt = new Date(Date.now() + delay);
     dailyDigestTimer = setTimeout(async () => {
       try {
         await fireDueReminders(bot);
-        await sendMorningBriefing(ownerId, bot);
+        const recipients = await listBriefingRecipients();
+        logger.info({ count: recipients.length }, "Sending 10:00 Nairobi briefings");
+        for (const userId of recipients) {
+          try {
+            await sendMorningBriefing(userId, bot, { includeEmail: isOwner(userId) });
+          } catch (err) {
+            logger.error({ err, userId }, "briefing send failed for user");
+          }
+        }
       } catch (err) {
         logger.error({ err }, "daily 10:00 briefing failed");
       }
@@ -505,14 +522,14 @@ export function startDailyDigestScheduler(bot: MyBot): void {
     }, delay);
     logger.info(
       { nextBriefing: nextAt.toISOString(), delayMs: delay },
-      "Daily morning briefing scheduled for 10:00 Africa/Nairobi",
+      "Daily morning briefing scheduled for 10:00 Africa/Nairobi (all approved users)",
     );
   }
 
   scheduleNext();
 }
 
-/** Every 2 hours: fire due reminders + ping owner with status + email pulse. */
+/** Every 2 hours: fire due reminders + ping owner. */
 export function startTwoHourPingScheduler(bot: MyBot): void {
   const ownerId = parseInt(process.env["BOT_OWNER_ID"] ?? "0", 10);
   if (!ownerId) {
@@ -529,7 +546,7 @@ export function startTwoHourPingScheduler(bot: MyBot): void {
       let text =
         `🔔 *2-HOUR PING*\n━━━━━━━━━━━━━━━━━━\n` +
         `⏰ Fired now: *${fired}*\n` +
-        `📌 Still pending: *${pending.length}*\n`;
+        `📌 Your pending: *${pending.length}*\n`;
 
       if (pending.length > 0) {
         text +=
@@ -561,14 +578,11 @@ export function startTwoHourPingScheduler(bot: MyBot): void {
           }
         } catch (err) {
           logger.warn({ err }, "2h email pulse failed");
-          text += `\n\n📧 Email pulse failed (check Gmail env).`;
+          text += `\n\n📧 Email pulse failed.`;
         }
-      } else {
-        text += `\n\n_Gmail not connected_`;
       }
 
-      text += `\n\n/digest for full briefing · /inbox · /reminders`;
-
+      text += `\n\n/digest · /inbox · /reminders`;
       await bot.api.sendMessage(ownerId, text, { parse_mode: "Markdown" });
     } catch (err) {
       logger.error({ err }, "2h ping tick failed");
