@@ -12,6 +12,7 @@ import { pool, db, productsTable, meetingsTable, accessTable } from "@workspace/
 import type { MyBot } from "../index";
 import { isOwner } from "../helpers";
 import { checkAccess } from "./access";
+import { md } from "../utils/escape";
 import { logger } from "../../lib/logger";
 import { routeChat } from "../../lib/model-router";
 import {
@@ -126,13 +127,19 @@ export async function fireDueReminders(bot: MyBot): Promise<number> {
     try {
       await bot.api.sendMessage(
         Number(row.user_id),
-        `⏰ *REMINDER*\n━━━━━━━━━━━━━━━━━━\n\n${row.label}`,
+        `⏰ *REMINDER*\n━━━━━━━━━━━━━━━━━━\n\n${md(row.label)}`,
         { parse_mode: "Markdown" },
       );
       await pool.query(`UPDATE bot_reminders SET sent_at = NOW() WHERE id = $1`, [row.id]);
       sent++;
     } catch (err) {
-      logger.error({ err, id: row.id }, "Failed to send reminder");
+      try {
+        await bot.api.sendMessage(Number(row.user_id), `⏰ REMINDER\n\n${row.label}`);
+        await pool.query(`UPDATE bot_reminders SET sent_at = NOW() WHERE id = $1`, [row.id]);
+        sent++;
+      } catch (err2) {
+        logger.error({ err: err2, id: row.id }, "Failed to send reminder");
+      }
     }
   }
   return sent;
@@ -152,18 +159,18 @@ export async function buildEmailBriefing(userId: number): Promise<string> {
       {
         role: "system",
         content:
-          "You are an executive email secretary. From the inbox dump, extract ONLY what is vital or time-sensitive. " +
-          "Output Telegram Markdown with sections:\n🔴 Worth a look\n🚨 Action required\nLow priority (brief)\n" +
-          "Be sharp. No fluff. Max ~350 words. Never invent emails.",
+          "You are an executive email secretary. Extract ONLY vital or time-sensitive items. " +
+          "Plain text with emoji section headers (no Markdown bold/italic). " +
+          "Sections: Worth a look / Action required / Low priority. Max ~350 words. Never invent emails.",
       },
       { role: "user", content: `Inbox dump (${emails.length} messages):\n\n${block}` },
     ]);
-    return `📧 *EMAIL BRIEFING*\n━━━━━━━━━━━━━━━━━━\n\n${ai.reply}`;
+    return `📧 *EMAIL BRIEFING*\n━━━━━━━━━━━━━━━━━━\n\n${md(ai.reply)}`;
   } catch (err) {
     logger.warn({ err }, "AI email summary failed");
     const lines = emails
       .slice(0, 10)
-      .map((e) => `• *${e.subject}*\n  _${e.from}_\n  ${e.snippet.slice(0, 120)}`)
+      .map((e) => `• ${md(e.subject)}\n  ${md(e.from)}\n  ${md(e.snippet.slice(0, 120))}`)
       .join("\n\n");
     return `📧 *INBOX* (raw)\n━━━━━━━━━━━━━━━━━━\n\n${lines}`;
   }
@@ -185,7 +192,7 @@ export async function sendMorningBriefing(
   });
 
   let text =
-    `☀️ *DAILY BRIEFING* — ${dateLine}\n━━━━━━━━━━━━━━━━━━\n_10:00 Africa/Nairobi_\n\n`;
+    `☀️ *DAILY BRIEFING* — ${dateLine}\n━━━━━━━━━━━━━━━━━━\n10:00 Africa/Nairobi\n\n`;
 
   try {
     const meetings = await db.select().from(meetingsTable).limit(20);
@@ -199,7 +206,7 @@ export async function sendMorningBriefing(
     if (todayMeetings.length === 0) text += `No meetings on the books today.\n\n`;
     else {
       for (const m of todayMeetings.slice(0, 8) as any[]) {
-        const title = m.title ?? m.name ?? "Meeting";
+        const title = md(m.title ?? m.name ?? "Meeting");
         const when = m.scheduledAt ?? m.startsAt ?? "";
         text += `• ${title}${when ? ` — ${new Date(when).toLocaleTimeString("en-KE", { timeZone: "Africa/Nairobi", hour: "2-digit", minute: "2-digit" })}` : ""}\n`;
       }
@@ -207,7 +214,7 @@ export async function sendMorningBriefing(
     }
   } catch (err) {
     logger.warn({ err }, "briefing meetings failed");
-    text += `📅 *Calendar*\n_(unavailable)_\n\n`;
+    text += `📅 *Calendar*\n(unavailable)\n\n`;
   }
 
   try {
@@ -223,7 +230,7 @@ export async function sendMorningBriefing(
           hour: "2-digit",
           minute: "2-digit",
         });
-        text += `• ${when} — ${r.label}\n`;
+        text += `• ${when} — ${md(r.label)}\n`;
       }
       text += `\n`;
     }
@@ -244,39 +251,37 @@ export async function sendMorningBriefing(
               {
                 role: "system",
                 content:
-                  "You are an executive secretary writing the email section of a morning briefing. " +
-                  "Telegram Markdown. Sections: 🔴 Worth a look / 🚨 Action required / Low priority. " +
-                  "Max 280 words. Never invent emails.",
+                  "Executive secretary morning email section. Plain text only — no Markdown * or _. " +
+                  "Sections: Worth a look / Action required / Low priority. Max 280 words. Never invent emails.",
               },
               { role: "user", content: block },
             ]);
-            text += `${ai.reply}\n\n`;
+            text += `${md(ai.reply)}\n\n`;
           } catch {
-            for (const e of emails.slice(0, 5)) text += `• ${e.subject} — _${e.from}_\n`;
+            for (const e of emails.slice(0, 5)) text += `• ${md(e.subject)} — ${md(e.from)}\n`;
             text += `\n`;
           }
         }
       } else {
-        text += `📧 *Inbox*\n_Not connected — /connect_gmail_\n\n`;
+        text += `📧 *Inbox*\nNot connected — /connect_gmail\n\n`;
       }
     } catch (err) {
       logger.warn({ err }, "briefing email failed");
-      text += `📧 *Inbox*\n_Scan failed_\n\n`;
+      text += `📧 *Inbox*\nScan failed\n\n`;
     }
   } else {
-    text += `📧 *Inbox*\n_Not linked — /connect_gmail_\n\n`;
+    text += `📧 *Inbox*\nNot linked — /connect_gmail\n\n`;
   }
 
   try {
     const products = await db.select().from(productsTable).where(eq(productsTable.isActive, true));
-    // Convention: stock === 0 means unlimited (same as shop UI). Low stock = 1–5 only.
     const lowStock = products.filter((p) => {
       const s = Number(p.stock);
       return Number.isFinite(s) && s > 0 && s <= 5;
     });
     text += `🛍️ *Shop*\n• Active products: ${products.length}\n`;
     if (lowStock.length > 0) {
-      text += `• ⚠️ Low stock (1–5 left): ${lowStock.map((p) => `${p.name} (${p.stock})`).join(", ")}\n`;
+      text += `• Low stock (1-5 left): ${lowStock.map((p) => `${md(p.name)} (${p.stock})`).join(", ")}\n`;
     } else {
       text += `• Stock: all unlimited or healthy\n`;
     }
@@ -289,10 +294,16 @@ export async function sendMorningBriefing(
   if (includeEmail) text += `• Handle action-required emails (/inbox)\n`;
   else text += `• Connect Gmail with /connect_gmail\n`;
   text += `• Check shop if low-stock items are listed\n`;
-  text += `\n_Commands: /digest · /remind · /reminders · /connect_gmail · /inbox_`;
+  text += `\nCommands: /digest · /remind · /reminders · /connect_gmail · /inbox`;
 
   if (text.length > 4000) text = text.slice(0, 3990) + "\n…";
-  await bot.api.sendMessage(userId, text, { parse_mode: "Markdown" });
+  try {
+    await bot.api.sendMessage(userId, text, { parse_mode: "Markdown" });
+  } catch (err) {
+    logger.warn({ err }, "digest Markdown parse failed — sending plain text");
+    const plain = text.replace(/\*/g, "").replace(/_/g, "").replace(/`/g, "'");
+    await bot.api.sendMessage(userId, plain);
+  }
 }
 
 export async function sendDailyDigest(userId: number, bot: MyBot): Promise<void> {
@@ -337,7 +348,7 @@ export function registerReminderHandlers(bot: MyBot): void {
       hour12: true,
     });
     await ctx.reply(
-      `⏰ *Reminder Set!* (#${id})\n━━━━━━━━━━━━━━━━━━\n\n📌 ${label}\n🕐 ${when} (Nairobi)`,
+      `⏰ *Reminder Set!* (#${id})\n━━━━━━━━━━━━━━━━━━\n\n📌 ${md(label)}\n🕐 ${when} (Nairobi)`,
       { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("⏰ My Reminders", "reminders:list") },
     );
   });
@@ -359,7 +370,7 @@ export function registerReminderHandlers(bot: MyBot): void {
           hour: "2-digit",
           minute: "2-digit",
         });
-        return `• #${r.id} — ${when}\n  ${r.label}`;
+        return `• #${r.id} — ${when}\n  ${md(r.label)}`;
       })
       .join("\n\n");
     await ctx.reply(`⏰ *Pending* (${rows.length})\n━━━━━━━━━━━━━━━━━━\n\n${lines}`, {
@@ -374,7 +385,7 @@ export function registerReminderHandlers(bot: MyBot): void {
 
     if (!isGmailOAuthAppConfigured()) {
       await ctx.reply(
-        "📧 *Gmail linking not available yet*\n\nOwner must set on Render:\n• `GOOGLE_CLIENT_ID`\n• `GOOGLE_CLIENT_SECRET`\n\nAnd add redirect URI:\n`{your-render-url}/oauth/google/callback`",
+        "📧 *Gmail linking not available yet*\n\nOwner must set on Render:\n• GOOGLE_CLIENT_ID\n• GOOGLE_CLIENT_SECRET\n\nAnd add redirect URI:\n{your-render-url}/oauth/google/callback",
         { parse_mode: "Markdown" },
       );
       return;
@@ -385,9 +396,9 @@ export function registerReminderHandlers(bot: MyBot): void {
       const existing = await getUserGmail(ctx.from.id);
       await ctx.reply(
         `📧 *Connect your Gmail*\n━━━━━━━━━━━━━━━━━━\n\n` +
-          (existing?.email ? `Currently linked: ${existing.email}\n\n` : "") +
-          `Tap below → choose Google account → allow *read-only* access.\n\n` +
-          `_Only used for your /inbox, /digest, and 10:00 Nairobi briefing._`,
+          (existing?.email ? `Currently linked: ${md(existing.email)}\n\n` : "") +
+          `Tap below → choose Google account → allow read-only access.\n\n` +
+          `Only used for your /inbox, /digest, and 10:00 Nairobi briefing.`,
         {
           parse_mode: "Markdown",
           reply_markup: new InlineKeyboard().url("🔗 Connect Gmail", url),
@@ -414,11 +425,15 @@ export function registerReminderHandlers(bot: MyBot): void {
       return;
     }
 
-    const thinking = await ctx.reply("📧 _Scanning inbox..._", { parse_mode: "Markdown" });
+    const thinking = await ctx.reply("📧 Scanning inbox...");
     try {
       const briefing = await buildEmailBriefing(ctx.from.id);
       await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
-      await ctx.reply(briefing, { parse_mode: "Markdown" });
+      try {
+        await ctx.reply(briefing, { parse_mode: "Markdown" });
+      } catch {
+        await ctx.reply(briefing.replace(/\*/g, "").replace(/_/g, ""));
+      }
     } catch (err) {
       logger.error({ err }, "inbox scan failed");
       await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
@@ -439,9 +454,13 @@ export function registerReminderHandlers(bot: MyBot): void {
         ? "⏰ No pending reminders."
         : `⏰ *Pending* (${rows.length})\n\n` +
           rows
-            .map((r) => `• #${r.id} ${new Date(r.fire_at).toLocaleString("en-KE", { timeZone: "Africa/Nairobi" })}\n  ${r.label}`)
+            .map((r) => `• #${r.id} ${new Date(r.fire_at).toLocaleString("en-KE", { timeZone: "Africa/Nairobi" })}\n  ${md(r.label)}`)
             .join("\n\n");
-    await ctx.reply(text, { parse_mode: "Markdown" });
+    try {
+      await ctx.reply(text, { parse_mode: "Markdown" });
+    } catch {
+      await ctx.reply(text.replace(/\*/g, ""));
+    }
   });
 
   bot.callbackQuery("reminders:clear_all", async (ctx) => {
@@ -452,13 +471,13 @@ export function registerReminderHandlers(bot: MyBot): void {
     }
     const n = await clearPendingReminders(ctx.from.id);
     await ctx.answerCallbackQuery(`🗑️ ${n} cleared`);
-    await ctx.editMessageText(`🗑️ *Cleared* ${n} reminder(s).`, { parse_mode: "Markdown" });
+    await ctx.editMessageText(`🗑️ Cleared ${n} reminder(s).`);
   });
 
   bot.command("digest", async (ctx) => {
     if (!ctx.from) return;
     if (!(await checkAccess(ctx, "free"))) return;
-    const thinking = await ctx.reply("☀️ _Building briefing..._", { parse_mode: "Markdown" });
+    const thinking = await ctx.reply("☀️ Building briefing...");
     try {
       await sendMorningBriefing(ctx.from.id, bot, {
         includeEmail: await hasUserGmail(ctx.from.id),
@@ -526,7 +545,7 @@ export function startTwoHourPingScheduler(bot: MyBot): void {
                 hour: "2-digit",
                 minute: "2-digit",
               });
-              return `• ${when} — ${r.label}`;
+              return `• ${when} — ${md(r.label)}`;
             })
             .join("\n");
       }
@@ -535,15 +554,19 @@ export function startTwoHourPingScheduler(bot: MyBot): void {
           const emails = await fetchRecentEmailsForUser(ownerId, { maxResults: 8 });
           const urgent = emails.slice(0, 3);
           if (urgent.length > 0) {
-            text += "\n\n📧 *Mail pulse*\n";
-            text += urgent.map((e) => `• ${e.subject} — _${e.from}_`).join("\n");
+            text += "\n\n📧 Mail pulse\n";
+            text += urgent.map((e) => `• ${md(e.subject)} — ${md(e.from)}`).join("\n");
           }
         } catch (err) {
           logger.warn({ err }, "2h email pulse failed");
         }
       }
       text += "\n\n/digest · /inbox · /reminders";
-      await bot.api.sendMessage(ownerId, text, { parse_mode: "Markdown" });
+      try {
+        await bot.api.sendMessage(ownerId, text, { parse_mode: "Markdown" });
+      } catch {
+        await bot.api.sendMessage(ownerId, text.replace(/\*/g, ""));
+      }
     } catch (err) {
       logger.error({ err }, "2h ping failed");
     }
