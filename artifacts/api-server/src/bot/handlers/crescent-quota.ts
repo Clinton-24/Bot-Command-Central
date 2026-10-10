@@ -5,6 +5,7 @@ import {
   db,
   usersTable,
 } from "@workspace/db";
+import { isOwner } from "../helpers";
 
 export const CRESCENT_DAILY_LIMIT = 50;
 export const CRESCENT_TOPUP_CREDITS = 20;
@@ -27,17 +28,28 @@ function getNairobiDate(): string {
   }).format(new Date());
 }
 
+/**
+ * Owner is always unlimited:
+ * 1) BOT_OWNER_ID env match (primary)
+ * 2) usersTable.isOwner flag (fallback)
+ */
 async function isUnlimitedUser(userId: number): Promise<boolean> {
-  const [user] = await db
-    .select({ isOwner: usersTable.isOwner })
-    .from(usersTable)
-    .where(eq(usersTable.id, userId));
-  return user?.isOwner === true;
+  if (isOwner(userId)) return true;
+
+  try {
+    const [user] = await db
+      .select({ isOwner: usersTable.isOwner })
+      .from(usersTable)
+      .where(eq(usersTable.id, userId));
+    return user?.isOwner === true;
+  } catch {
+    return false;
+  }
 }
 
 export async function getCrescentQuotaStatus(userId: number): Promise<QuotaState> {
   if (await isUnlimitedUser(userId)) {
-    return { used: 0, limit: CRESCENT_DAILY_LIMIT, bonus: 0, allowed: true, unlimited: true };
+    return { used: 0, limit: Number.POSITIVE_INFINITY, bonus: 0, allowed: true, unlimited: true };
   }
 
   const today = getNairobiDate();
@@ -61,7 +73,7 @@ export async function getCrescentQuotaStatus(userId: number): Promise<QuotaState
 
 export async function consumeCrescentQuota(userId: number): Promise<QuotaState> {
   if (await isUnlimitedUser(userId)) {
-    return { used: 0, limit: CRESCENT_DAILY_LIMIT, bonus: 0, allowed: true, unlimited: true };
+    return { used: 0, limit: Number.POSITIVE_INFINITY, bonus: 0, allowed: true, unlimited: true };
   }
 
   const today = getNairobiDate();
