@@ -212,6 +212,16 @@ export async function runMigrations(): Promise<void> {
       WHERE sent_at IS NULL;
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_gmail_tokens (
+        user_id BIGINT PRIMARY KEY,
+        refresh_token TEXT NOT NULL,
+        email TEXT,
+        connected_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+    `);
+
     logger.info("Migrations complete ✅");
   } catch (err) {
     logger.error({ err }, "Migration failed ❌");
