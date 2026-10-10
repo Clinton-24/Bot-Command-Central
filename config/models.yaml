@@ -1,37 +1,51 @@
 taskrouting:
   chat:
-    primary: "gpt-4o-mini"
-    fallbacks: ["gpt-4o", "claude-3-5-sonnet-20241022"]
+    primary: "openai/gpt-4o-mini"
+    fallbacks:
+      - "google/gemma-4-26b-a4b-it:free"
+      - "nvidia/nemotron-3-ultra-550b-a55b:free"
+      - "openai/gpt-4o"
     params:
       maxtokens: 2000
       temperature: 0.3
   analysis:
-    primary: "gpt-4o"
-    fallbacks: ["claude-3-5-sonnet-20241022"]
+    primary: "openai/gpt-4o"
+    fallbacks:
+      - "anthropic/claude-sonnet-4.5"
+      - "google/gemma-4-26b-a4b-it:free"
+      - "openai/gpt-4o-mini"
     params:
       maxtokens: 4000
       temperature: 0.1
   code:
-    primary: "claude-3-5-sonnet-20241022"
-    fallbacks: ["gpt-4o"]
+    primary: "anthropic/claude-sonnet-4.5"
+    fallbacks:
+      - "openai/gpt-4o"
+      - "google/gemma-4-26b-a4b-it:free"
     params:
       maxtokens: 8000
       temperature: 0.0
   math:
-    primary: "gpt-4o"
-    fallbacks: ["claude-3-5-sonnet-20241022"]
+    primary: "openai/gpt-4o"
+    fallbacks:
+      - "openai/gpt-4o-mini"
+      - "google/gemma-4-26b-a4b-it:free"
     params:
       maxtokens: 2000
       temperature: 0.0
   creative:
-    primary: "claude-3-5-sonnet-20241022"
-    fallbacks: ["gpt-4o"]
+    primary: "openai/gpt-4o"
+    fallbacks:
+      - "anthropic/claude-sonnet-4.5"
+      - "google/gemma-4-26b-a4b-it:free"
     params:
       maxtokens: 4000
       temperature: 0.7
   vision:
-    primary: "gpt-4o"
-    fallbacks: ["claude-3-5-sonnet-20241022"]
+    primary: "openai/gpt-4o"
+    fallbacks:
+      - "anthropic/claude-sonnet-4.5"
+      - "openai/gpt-4o-mini"
     params:
       maxtokens: 2000
       temperature: 0.2
@@ -40,18 +54,18 @@ providers:
   openai:
     apikeyenv: "OPENAI_API_KEY"
     baseurl: "https://api.openai.com/v1"
-    models: ["gpt-4o", "gpt-4o-mini", "text-embedding-3-small"]
+    models: ["gpt-4o", "gpt-4o-mini", "text-embedding-3-small", "dall-e-3"]
   anthropic:
     apikeyenv: "ANTHROPIC_API_KEY"
     baseurl: "https://api.anthropic.com/v1"
-    models: ["claude-3-5-sonnet-20241022"]
+    models: ["claude-sonnet-4.5", "claude-3-5-sonnet-20241022"]
   openrouter:
     apikeyenv: "OPENROUTER_API_KEY"
     baseurl: "https://openrouter.ai/api/v1"
     models: ["*"]
 
 defaults:
-  timeoutseconds: 30
+  timeoutseconds: 60
   maxretries: 2
   retrybackoffbase: 1.5
   embedmodel: "text-embedding-3-small"

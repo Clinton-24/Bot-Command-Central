@@ -28,17 +28,49 @@ export interface GeneratedImage {
 
 type OpenAiResponse = { choices?: Array<{ message?: { content?: string | null } }> };
 
+/** Map bare model names to OpenRouter-qualified IDs. */
+function openRouterModelId(model: string): string {
+  if (model.includes("/")) return model;
+  if (
+    model.startsWith("gpt-") ||
+    model.startsWith("o1") ||
+    model.startsWith("o3") ||
+    model.startsWith("dall-e") ||
+    model.startsWith("text-embedding-")
+  ) {
+    return `openai/${model}`;
+  }
+  if (model.startsWith("claude-")) return `anthropic/${model}`;
+  if (model.startsWith("gemini") || model.startsWith("gemma")) return `google/${model}`;
+  return model;
+}
+
+/** Strip provider prefix for native OpenAI / Anthropic APIs. */
+function nativeModelId(model: string): string {
+  const slash = model.indexOf("/");
+  if (slash < 0) return model;
+  return model.slice(slash + 1);
+}
+
 function providerForModel(model: string): ProviderName {
-  if (model.startsWith("gpt-") || model.startsWith("o1") || model.startsWith("o3") || model.startsWith("text-embedding-") || model.startsWith("dall-e")) {
+  const bare = nativeModelId(model);
+  if (bare.startsWith("gpt-") || bare.startsWith("o1") || bare.startsWith("o3") || bare.startsWith("dall-e") || bare.startsWith("text-embedding-")) {
     return "openai";
   }
-  if (model.startsWith("claude-")) return "anthropic";
+  if (bare.startsWith("claude-")) return "anthropic";
   return "openrouter";
 }
 
 function providersForModel(model: string): ProviderName[] {
   const direct = providerForModel(model);
-  return direct === "openrouter" ? ["openrouter"] : [direct, "openrouter"];
+  // Prefer OpenRouter when only that key exists; always allow OpenRouter as fallback
+  if (direct === "openrouter") return ["openrouter"];
+  const hasDirect = Boolean(getProviderApiKey(direct));
+  const hasOr = Boolean(getProviderApiKey("openrouter"));
+  if (hasDirect && hasOr) return [direct, "openrouter"];
+  if (hasDirect) return [direct];
+  if (hasOr) return ["openrouter"];
+  return [direct, "openrouter"];
 }
 
 function normalizeContent(value: unknown): string {
@@ -102,6 +134,8 @@ async function callProvider(
   const apiKey = getProviderApiKey(provider);
   if (!apiKey) throw new Error(`${providerConfig.apiKeyEnv} is not configured`);
 
+  const resolvedModel = provider === "openrouter" ? openRouterModelId(model) : nativeModelId(model);
+
   if (provider === "anthropic") {
     const system = messages
       .filter((message) => message.role === "system")
@@ -132,12 +166,12 @@ async function callProvider(
     const body = await requestJson(`${providerConfig.baseUrl}/messages`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${apiKey}`,
+        "x-api-key": apiKey,
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
       },
       body: JSON.stringify({
-        model,
+        model: resolvedModel,
         max_tokens: maxTokens,
         temperature,
         system: system || undefined,
@@ -160,7 +194,7 @@ async function callProvider(
       } : {}),
     },
     body: JSON.stringify({
-      model,
+      model: resolvedModel,
       max_tokens: maxTokens,
       temperature,
       messages: buildOpenAiMessages(messages),
@@ -180,7 +214,7 @@ export async function routeChat(task: TaskType, messages: ChatMessage[]): Promis
   for (const model of candidates) {
     for (const provider of providersForModel(model)) {
       const providerConfig = getModelConfig().providers[provider];
-      const supported = providerConfig.models.includes("*") || providerConfig.models.includes(model);
+      const supported = providerConfig.models.includes("*") || providerConfig.models.includes(nativeModelId(model)) || providerConfig.models.includes(model);
       if (!supported && provider !== "openrouter") continue;
       if (!getProviderApiKey(provider)) {
         lastError = `${providerConfig.apiKeyEnv} is not configured`;
@@ -205,10 +239,38 @@ export async function routeChat(task: TaskType, messages: ChatMessage[]): Promis
   throw new Error(`All configured AI models failed for ${task}. Last error: ${lastError}`);
 }
 
-/** Generate an image from a text prompt (OpenAI DALL-E or OpenRouter image models). */
+/** Generate an image via OpenAI DALL-E or OpenRouter Images API. */
 export async function generateImage(prompt: string, size = "1024x1024"): Promise<GeneratedImage> {
   const openaiKey = getProviderApiKey("openai");
   const openrouterKey = getProviderApiKey("openrouter");
+
+  // Prefer OpenRouter Images API when that key is present (user's setup)
+  if (openrouterKey) {
+    const model = process.env.IMAGE_MODEL ?? "google/gemini-2.5-flash-image";
+    const config = getModelConfig().providers.openrouter;
+    const body = await requestJson(`${config.baseUrl}/images`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${openrouterKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": process.env.RENDER_EXTERNAL_URL ?? "https://bot-command-central-1.onrender.com",
+        "X-Title": "Crescent-AI",
+      },
+      body: JSON.stringify({
+        model,
+        prompt,
+        aspect_ratio: "1:1",
+        // size shorthand also accepted by some endpoints
+        size,
+      }),
+    });
+    const data = Array.isArray(body.data) ? body.data as Array<{ url?: string; b64_json?: string }> : [];
+    const first = data[0];
+    if (!first?.url && !first?.b64_json) {
+      throw new Error(`OpenRouter image API returned no image for model ${model}`);
+    }
+    return { url: first.url, b64: first.b64_json, model };
+  }
 
   if (openaiKey) {
     const config = getModelConfig().providers.openai;
@@ -232,36 +294,7 @@ export async function generateImage(prompt: string, size = "1024x1024"): Promise
     return { url: first.url, b64: first.b64_json, model: process.env.IMAGE_MODEL ?? "dall-e-3" };
   }
 
-  if (openrouterKey) {
-    const model = process.env.IMAGE_MODEL ?? "black-forest-labs/flux-1.1-pro";
-    const config = getModelConfig().providers.openrouter;
-    const body = await requestJson(`${config.baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${openrouterKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": process.env.RENDER_EXTERNAL_URL ?? "https://bot-command-central-1.onrender.com",
-        "X-Title": "Crescent-AI",
-      },
-      body: JSON.stringify({
-        model,
-        messages: [{ role: "user", content: prompt }],
-      }),
-    });
-    const choices = Array.isArray(body.choices) ? body.choices as OpenAiResponse["choices"] : [];
-    const content = normalizeContent(choices?.[0]?.message?.content);
-    const urlMatch = content.match(/https?:\/\/\S+\.(?:png|jpg|jpeg|webp|gif)/i)
-      ?? content.match(/!\[[^\]]*\]\((https?:\/\/[^)]+)\)/);
-    const url = urlMatch ? (urlMatch[1] ?? urlMatch[0]) : undefined;
-    if (!url) {
-      const anyUrl = content.match(/https?:\/\/\S+/);
-      if (anyUrl) return { url: anyUrl[0].replace(/[)\]>]+$/, ""), model };
-      throw new Error("OpenRouter image model did not return an image URL. Set OPENAI_API_KEY for DALL-E or configure IMAGE_MODEL.");
-    }
-    return { url: url.replace(/[)\]>]+$/, ""), model };
-  }
-
-  throw new Error("No image provider configured. Set OPENAI_API_KEY (DALL-E) or OPENROUTER_API_KEY + IMAGE_MODEL.");
+  throw new Error("No image provider configured. Set OPENROUTER_API_KEY or OPENAI_API_KEY.");
 }
 
 export async function createEmbedding(input: string): Promise<RoutedEmbeddingResponse | null> {
