@@ -1,17 +1,19 @@
 /**
- * Reminders + email secretary pings
+ * Reminders + email secretary + daily morning briefing
  * • /remind — persistent DB reminders
  * • /reminders — list pending
  * • /inbox — Gmail scan + AI vital summary
- * • Every 2 hours: ping owner with due reminders + mail pulse
+ * • /digest — full morning briefing (manual)
+ * • Daily 10:00 Africa/Nairobi — automatic full briefing
+ * • Every 2 hours — status ping
  */
 
 import { InlineKeyboard } from "grammy";
-import { pool } from "@workspace/db";
+import { eq } from "drizzle-orm";
+import { pool, db, productsTable, meetingsTable } from "@workspace/db";
 import type { MyBot } from "../index";
 import { isOwner } from "../helpers";
 import { logger } from "../../lib/logger";
-import { sendDailyDigest } from "./hexagon";
 import { routeChat } from "../../lib/model-router";
 import {
   fetchRecentEmails,
@@ -40,6 +42,36 @@ function parseDelay(input: string): number | null {
   if (unit.startsWith("h")) return val * 60 * 60 * 1000;
   if (unit.startsWith("d")) return val * 24 * 60 * 60 * 1000;
   return null;
+}
+
+/** Milliseconds until next HH:MM in Africa/Nairobi. */
+function msUntilNextNairobiTime(hour: number, minute = 0): number {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Africa/Nairobi",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).formatToParts(now);
+  const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "0";
+  const y = Number(get("year"));
+  const mo = Number(get("month"));
+  const d = Number(get("day"));
+  const h = Number(get("hour"));
+  const mi = Number(get("minute"));
+  const s = Number(get("second"));
+
+  // Approximate "now" as Nairobi wall-clock encoded in UTC date object
+  const nowNairobiAsUtc = Date.UTC(y, mo - 1, d, h, mi, s);
+  let targetNairobiAsUtc = Date.UTC(y, mo - 1, d, hour, minute, 0);
+  if (targetNairobiAsUtc <= nowNairobiAsUtc) {
+    targetNairobiAsUtc += 24 * 60 * 60 * 1000;
+  }
+  return targetNairobiAsUtc - nowNairobiAsUtc;
 }
 
 export async function createReminder(
@@ -105,17 +137,13 @@ export async function buildEmailBriefing(): Promise<string> {
   if (!isGmailConfigured()) {
     return (
       "📧 *Email not connected*\n\n" +
-      "Set these on Render:\n" +
-      "• `GOOGLE_CLIENT_ID`\n" +
-      "• `GOOGLE_CLIENT_SECRET`\n" +
-      "• `GMAIL_REFRESH_TOKEN`\n\n" +
-      "_Enable Gmail API, create OAuth client, generate refresh token with gmail.readonly scope._"
+      "Set on Render: `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN`"
     );
   }
 
   const emails = await fetchRecentEmails({ maxResults: 20 });
   if (emails.length === 0) {
-    return "📧 *Inbox*\n━━━━━━━━━━━━━━━━━━\n\nNo recent primary inbox messages (last 2 days).";
+    return "📧 *Inbox*\n\nNo recent primary inbox messages (last 2 days).";
   }
 
   const block = formatEmailsForPrompt(emails);
@@ -142,6 +170,139 @@ export async function buildEmailBriefing(): Promise<string> {
   }
 }
 
+/** Full secretary briefing: date, calendar/meetings, reminders, emails, shop, actions. */
+export async function sendMorningBriefing(userId: number, bot: MyBot): Promise<void> {
+  const now = new Date();
+  const dateLine = now.toLocaleDateString("en-KE", {
+    timeZone: "Africa/Nairobi",
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  });
+
+  let text =
+    `☀️ *DAILY BRIEFING* — ${dateLine}\n` +
+    `━━━━━━━━━━━━━━━━━━\n` +
+    `_10:00 Africa/Nairobi_\n\n`;
+
+  // ── Calendar / meetings (today, Nairobi) ──
+  try {
+    const meetings = await db.select().from(meetingsTable).limit(20);
+    const todayStr = now.toLocaleDateString("en-CA", { timeZone: "Africa/Nairobi" }); // YYYY-MM-DD
+    const todayMeetings = meetings.filter((m: any) => {
+      const raw = m.scheduledAt ?? m.startsAt ?? m.date ?? m.meetingAt;
+      if (!raw) return false;
+      const d = new Date(raw);
+      const s = d.toLocaleDateString("en-CA", { timeZone: "Africa/Nairobi" });
+      return s === todayStr;
+    });
+    text += `📅 *Calendar*\n`;
+    if (todayMeetings.length === 0) {
+      text += `No meetings on the books today.\n\n`;
+    } else {
+      for (const m of todayMeetings.slice(0, 8) as any[]) {
+        const title = m.title ?? m.name ?? "Meeting";
+        const when = m.scheduledAt ?? m.startsAt ?? "";
+        text += `• ${title}${when ? ` — ${new Date(when).toLocaleTimeString("en-KE", { timeZone: "Africa/Nairobi", hour: "2-digit", minute: "2-digit" })}` : ""}\n`;
+      }
+      text += `\n`;
+    }
+  } catch (err) {
+    logger.warn({ err }, "briefing meetings lookup failed");
+    text += `📅 *Calendar*\n_(unavailable)_\n\n`;
+  }
+
+  // ── Pending reminders ──
+  try {
+    const pending = await listPendingReminders(userId);
+    text += `⏰ *Reminders* (${pending.length} pending)\n`;
+    if (pending.length === 0) {
+      text += `None queued.\n\n`;
+    } else {
+      for (const r of pending.slice(0, 8)) {
+        const when = new Date(r.fire_at).toLocaleString("en-KE", {
+          timeZone: "Africa/Nairobi",
+          month: "short",
+          day: "numeric",
+          hour: "2-digit",
+          minute: "2-digit",
+        });
+        text += `• ${when} — ${r.label}\n`;
+      }
+      text += `\n`;
+    }
+  } catch (err) {
+    logger.warn({ err }, "briefing reminders failed");
+  }
+
+  // ── Emails ──
+  try {
+    if (isGmailConfigured()) {
+      const emails = await fetchRecentEmails({ maxResults: 18 });
+      text += `📧 *Inbox* (${emails.length} recent primary)\n`;
+      if (emails.length === 0) {
+        text += `Quiet — no primary mail in last 2 days.\n\n`;
+      } else {
+        const block = formatEmailsForPrompt(emails);
+        try {
+          const ai = await routeChat("analysis", [
+            {
+              role: "system",
+              content:
+                "You are an executive secretary writing the email section of a morning briefing. " +
+                "Use Telegram Markdown. Sections: 🔴 Worth a look / 🚨 Action required / Low priority. " +
+                "Be concise (max 280 words). Never invent emails.",
+            },
+            { role: "user", content: block },
+          ]);
+          text += `${ai.reply}\n\n`;
+        } catch {
+          for (const e of emails.slice(0, 5)) {
+            text += `• ${e.subject} — _${e.from}_\n`;
+          }
+          text += `\n`;
+        }
+      }
+    } else {
+      text += `📧 *Inbox*\n_Not connected — set Gmail env vars on Render_\n\n`;
+    }
+  } catch (err) {
+    logger.warn({ err }, "briefing email section failed");
+    text += `📧 *Inbox*\n_Scan failed_\n\n`;
+  }
+
+  // ── Shop snapshot ──
+  try {
+    const products = await db.select().from(productsTable).where(eq(productsTable.isActive, true));
+    const lowStock = products.filter((p) => Number(p.stock) <= 5 && Number(p.stock) >= 0);
+    text += `🛍️ *Shop*\n• Active products: ${products.length}\n`;
+    if (lowStock.length > 0) {
+      text += `• ⚠️ Low stock: ${lowStock.map((p) => p.name).join(", ")}\n`;
+    }
+    text += `\n`;
+  } catch (err) {
+    logger.warn({ err }, "briefing shop section failed");
+  }
+
+  // ── Suggested focus ──
+  text += `🎯 *Suggested focus*\n`;
+  text += `• Review action-required emails (/inbox)\n`;
+  text += `• Clear or reschedule pending reminders (/reminders)\n`;
+  text += `• Check shop stock if low-stock items listed\n`;
+  text += `\n_Manual run: /digest · /inbox · /reminders_`;
+
+  // Telegram message limit ~4096
+  if (text.length > 4000) text = text.slice(0, 3990) + "\n…";
+
+  await bot.api.sendMessage(userId, text, { parse_mode: "Markdown" });
+}
+
+/** @deprecated alias used by older imports */
+export async function sendDailyDigest(userId: number, bot: MyBot): Promise<void> {
+  await sendMorningBriefing(userId, bot);
+}
+
 export function registerReminderHandlers(bot: MyBot): void {
   bot.command("remind", async (ctx) => {
     if (!ctx.from || !isOwner(ctx.from.id)) {
@@ -159,8 +320,8 @@ export function registerReminderHandlers(bot: MyBot): void {
           `• /remind 30m Check emails\n` +
           `• /remind 2h Team call at 3pm\n` +
           `• /remind 1d Review monthly report\n\n` +
-          `Time units: s, m, h, d\n` +
-          `Also: /inbox · /reminders · every 2h auto-ping`,
+          `Daily briefing: *10:00 Nairobi* auto\n` +
+          `Also: /inbox · /reminders · /digest`,
         { parse_mode: "Markdown" },
       );
       return;
@@ -308,33 +469,44 @@ export function registerReminderHandlers(bot: MyBot): void {
       await ctx.reply("⛔ Owner only.");
       return;
     }
-    await sendDailyDigest(ctx.from.id, bot);
+    const thinking = await ctx.reply("☀️ _Building morning briefing..._", { parse_mode: "Markdown" });
+    try {
+      await sendMorningBriefing(ctx.from.id, bot);
+      await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
+    } catch (err) {
+      logger.error({ err }, "manual digest failed");
+      await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
+      await ctx.reply(`❌ Briefing failed: ${err instanceof Error ? err.message : "Unknown"}`);
+    }
   });
 }
 
 let dailyDigestTimer: ReturnType<typeof setTimeout> | null = null;
-let twoHourTimer: ReturnType<typeof setInterval> | null = null;
 
+/** Schedule full morning briefing every day at 10:00 Africa/Nairobi. */
 export function startDailyDigestScheduler(bot: MyBot): void {
   const ownerId = parseInt(process.env["BOT_OWNER_ID"] ?? "0", 10);
   if (!ownerId) {
-    logger.warn("BOT_OWNER_ID not set — daily digest disabled");
+    logger.warn("BOT_OWNER_ID not set — daily briefing disabled");
     return;
   }
 
   function scheduleNext(): void {
-    const now = new Date();
-    const next = new Date();
-    next.setHours(8, 0, 0, 0);
-    if (next <= now) next.setDate(next.getDate() + 1);
-    const delay = next.getTime() - now.getTime();
+    const delay = msUntilNextNairobiTime(10, 0);
+    const nextAt = new Date(Date.now() + delay);
     dailyDigestTimer = setTimeout(async () => {
-      await sendDailyDigest(ownerId, bot).catch((err) =>
-        logger.error({ err }, "daily digest failed"),
-      );
+      try {
+        await fireDueReminders(bot);
+        await sendMorningBriefing(ownerId, bot);
+      } catch (err) {
+        logger.error({ err }, "daily 10:00 briefing failed");
+      }
       scheduleNext();
     }, delay);
-    logger.info({ nextDigest: next.toISOString() }, "Daily digest scheduled");
+    logger.info(
+      { nextBriefing: nextAt.toISOString(), delayMs: delay },
+      "Daily morning briefing scheduled for 10:00 Africa/Nairobi",
+    );
   }
 
   scheduleNext();
@@ -392,10 +564,10 @@ export function startTwoHourPingScheduler(bot: MyBot): void {
           text += `\n\n📧 Email pulse failed (check Gmail env).`;
         }
       } else {
-        text += `\n\n_Gmail not connected — set GOOGLE_CLIENT_ID / SECRET / GMAIL_REFRESH_TOKEN_`;
+        text += `\n\n_Gmail not connected_`;
       }
 
-      text += `\n\n/inbox for full briefing · /reminders to manage`;
+      text += `\n\n/digest for full briefing · /inbox · /reminders`;
 
       await bot.api.sendMessage(ownerId, text, { parse_mode: "Markdown" });
     } catch (err) {
@@ -403,12 +575,11 @@ export function startTwoHourPingScheduler(bot: MyBot): void {
     }
   }
 
-  // Poll due reminders every 2 minutes so timed reminders fire on time
   setInterval(() => {
     fireDueReminders(bot).catch((err) => logger.error({ err }, "reminder poll failed"));
   }, 2 * 60 * 1000);
 
-  twoHourTimer = setInterval(() => {
+  setInterval(() => {
     void tick();
   }, INTERVAL);
 
