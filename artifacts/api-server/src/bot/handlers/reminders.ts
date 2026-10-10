@@ -1,9 +1,6 @@
 /**
  * Reminders + email secretary + daily morning briefing
- * • /remind /reminders /digest — all approved users
- * • /connect_gmail /disconnect_gmail /inbox — each user links their own Gmail
- * • Daily 10:00 Africa/Nairobi — briefing to every approved user
- * • Every 2 hours — owner status ping
+ * Digest is plain text (no parse_mode) so /connect_gmail underscores never break Telegram.
  */
 
 import { InlineKeyboard } from "grammy";
@@ -127,19 +124,12 @@ export async function fireDueReminders(bot: MyBot): Promise<number> {
     try {
       await bot.api.sendMessage(
         Number(row.user_id),
-        `⏰ *REMINDER*\n━━━━━━━━━━━━━━━━━━\n\n${md(row.label)}`,
-        { parse_mode: "Markdown" },
+        `⏰ REMINDER\n━━━━━━━━━━━━━━━━━━\n\n${row.label}`,
       );
       await pool.query(`UPDATE bot_reminders SET sent_at = NOW() WHERE id = $1`, [row.id]);
       sent++;
     } catch (err) {
-      try {
-        await bot.api.sendMessage(Number(row.user_id), `⏰ REMINDER\n\n${row.label}`);
-        await pool.query(`UPDATE bot_reminders SET sent_at = NOW() WHERE id = $1`, [row.id]);
-        sent++;
-      } catch (err2) {
-        logger.error({ err: err2, id: row.id }, "Failed to send reminder");
-      }
+      logger.error({ err, id: row.id }, "Failed to send reminder");
     }
   }
   return sent;
@@ -147,11 +137,11 @@ export async function fireDueReminders(bot: MyBot): Promise<number> {
 
 export async function buildEmailBriefing(userId: number): Promise<string> {
   if (!(await hasUserGmail(userId))) {
-    return "📧 *Email not connected*\n\nLink your Gmail with /connect_gmail so it appears in /digest and the 10:00 Nairobi briefing.";
+    return "📧 EMAIL NOT CONNECTED\n\nLink your Gmail with /connect_gmail so it appears in /digest and the 10:00 Nairobi briefing.";
   }
   const emails = await fetchRecentEmailsForUser(userId, { maxResults: 20 });
   if (emails.length === 0) {
-    return "📧 *Inbox*\n\nNo recent primary inbox messages (last 2 days).";
+    return "📧 INBOX\n\nNo recent primary inbox messages (last 2 days).";
   }
   const block = formatEmailsForPrompt(emails);
   try {
@@ -160,19 +150,19 @@ export async function buildEmailBriefing(userId: number): Promise<string> {
         role: "system",
         content:
           "You are an executive email secretary. Extract ONLY vital or time-sensitive items. " +
-          "Plain text with emoji section headers (no Markdown bold/italic). " +
+          "Plain text with emoji section headers (no Markdown). " +
           "Sections: Worth a look / Action required / Low priority. Max ~350 words. Never invent emails.",
       },
       { role: "user", content: `Inbox dump (${emails.length} messages):\n\n${block}` },
     ]);
-    return `📧 *EMAIL BRIEFING*\n━━━━━━━━━━━━━━━━━━\n\n${md(ai.reply)}`;
+    return `📧 EMAIL BRIEFING\n━━━━━━━━━━━━━━━━━━\n\n${ai.reply}`;
   } catch (err) {
     logger.warn({ err }, "AI email summary failed");
     const lines = emails
       .slice(0, 10)
-      .map((e) => `• ${md(e.subject)}\n  ${md(e.from)}\n  ${md(e.snippet.slice(0, 120))}`)
+      .map((e) => `• ${e.subject}\n  ${e.from}\n  ${e.snippet.slice(0, 120)}`)
       .join("\n\n");
-    return `📧 *INBOX* (raw)\n━━━━━━━━━━━━━━━━━━\n\n${lines}`;
+    return `📧 INBOX (raw)\n━━━━━━━━━━━━━━━━━━\n\n${lines}`;
   }
 }
 
@@ -192,7 +182,7 @@ export async function sendMorningBriefing(
   });
 
   let text =
-    `☀️ *DAILY BRIEFING* — ${dateLine}\n━━━━━━━━━━━━━━━━━━\n10:00 Africa/Nairobi\n\n`;
+    `☀️ DAILY BRIEFING — ${dateLine}\n━━━━━━━━━━━━━━━━━━\n10:00 Africa/Nairobi\n\n`;
 
   try {
     const meetings = await db.select().from(meetingsTable).limit(20);
@@ -202,11 +192,11 @@ export async function sendMorningBriefing(
       if (!raw) return false;
       return new Date(raw).toLocaleDateString("en-CA", { timeZone: "Africa/Nairobi" }) === todayStr;
     });
-    text += `📅 *Calendar*\n`;
+    text += `📅 Calendar\n`;
     if (todayMeetings.length === 0) text += `No meetings on the books today.\n\n`;
     else {
       for (const m of todayMeetings.slice(0, 8) as any[]) {
-        const title = md(m.title ?? m.name ?? "Meeting");
+        const title = String(m.title ?? m.name ?? "Meeting");
         const when = m.scheduledAt ?? m.startsAt ?? "";
         text += `• ${title}${when ? ` — ${new Date(when).toLocaleTimeString("en-KE", { timeZone: "Africa/Nairobi", hour: "2-digit", minute: "2-digit" })}` : ""}\n`;
       }
@@ -214,12 +204,12 @@ export async function sendMorningBriefing(
     }
   } catch (err) {
     logger.warn({ err }, "briefing meetings failed");
-    text += `📅 *Calendar*\n(unavailable)\n\n`;
+    text += `📅 Calendar\n(unavailable)\n\n`;
   }
 
   try {
     const pending = await listPendingReminders(userId);
-    text += `⏰ *Your reminders* (${pending.length} pending)\n`;
+    text += `⏰ Your reminders (${pending.length} pending)\n`;
     if (pending.length === 0) text += `None queued. Use /remind 2h message\n\n`;
     else {
       for (const r of pending.slice(0, 8)) {
@@ -230,7 +220,7 @@ export async function sendMorningBriefing(
           hour: "2-digit",
           minute: "2-digit",
         });
-        text += `• ${when} — ${md(r.label)}\n`;
+        text += `• ${when} — ${r.label}\n`;
       }
       text += `\n`;
     }
@@ -242,7 +232,7 @@ export async function sendMorningBriefing(
     try {
       if (await hasUserGmail(userId)) {
         const emails = await fetchRecentEmailsForUser(userId, { maxResults: 18 });
-        text += `📧 *Inbox* (${emails.length} recent primary)\n`;
+        text += `📧 Inbox (${emails.length} recent primary)\n`;
         if (emails.length === 0) text += `Quiet — no primary mail in last 2 days.\n\n`;
         else {
           const block = formatEmailsForPrompt(emails);
@@ -251,26 +241,26 @@ export async function sendMorningBriefing(
               {
                 role: "system",
                 content:
-                  "Executive secretary morning email section. Plain text only — no Markdown * or _. " +
+                  "Executive secretary morning email section. Plain text only. " +
                   "Sections: Worth a look / Action required / Low priority. Max 280 words. Never invent emails.",
               },
               { role: "user", content: block },
             ]);
-            text += `${md(ai.reply)}\n\n`;
+            text += `${ai.reply}\n\n`;
           } catch {
-            for (const e of emails.slice(0, 5)) text += `• ${md(e.subject)} — ${md(e.from)}\n`;
+            for (const e of emails.slice(0, 5)) text += `• ${e.subject} — ${e.from}\n`;
             text += `\n`;
           }
         }
       } else {
-        text += `📧 *Inbox*\nNot connected — /connect_gmail\n\n`;
+        text += `📧 Inbox\nNot connected — /connect_gmail\n\n`;
       }
     } catch (err) {
       logger.warn({ err }, "briefing email failed");
-      text += `📧 *Inbox*\nScan failed\n\n`;
+      text += `📧 Inbox\nScan failed\n\n`;
     }
   } else {
-    text += `📧 *Inbox*\nNot linked — /connect_gmail\n\n`;
+    text += `📧 Inbox\nNot linked — /connect_gmail\n\n`;
   }
 
   try {
@@ -279,9 +269,9 @@ export async function sendMorningBriefing(
       const s = Number(p.stock);
       return Number.isFinite(s) && s > 0 && s <= 5;
     });
-    text += `🛍️ *Shop*\n• Active products: ${products.length}\n`;
+    text += `🛍️ Shop\n• Active products: ${products.length}\n`;
     if (lowStock.length > 0) {
-      text += `• Low stock (1-5 left): ${lowStock.map((p) => `${md(p.name)} (${p.stock})`).join(", ")}\n`;
+      text += `• Low stock (1-5 left): ${lowStock.map((p) => `${p.name} (${p.stock})`).join(", ")}\n`;
     } else {
       text += `• Stock: all unlimited or healthy\n`;
     }
@@ -290,20 +280,15 @@ export async function sendMorningBriefing(
     logger.warn({ err }, "briefing shop failed");
   }
 
-  text += `🎯 *Suggested focus*\n• Review your reminders (/reminders)\n`;
+  text += `🎯 Suggested focus\n• Review your reminders (/reminders)\n`;
   if (includeEmail) text += `• Handle action-required emails (/inbox)\n`;
   else text += `• Connect Gmail with /connect_gmail\n`;
   text += `• Check shop if low-stock items are listed\n`;
   text += `\nCommands: /digest · /remind · /reminders · /connect_gmail · /inbox`;
 
   if (text.length > 4000) text = text.slice(0, 3990) + "\n…";
-  try {
-    await bot.api.sendMessage(userId, text, { parse_mode: "Markdown" });
-  } catch (err) {
-    logger.warn({ err }, "digest Markdown parse failed — sending plain text");
-    const plain = text.replace(/\*/g, "").replace(/_/g, "").replace(/`/g, "'");
-    await bot.api.sendMessage(userId, plain);
-  }
+  // Always plain text — no parse_mode (underscores in command names break Markdown)
+  await bot.api.sendMessage(userId, text);
 }
 
 export async function sendDailyDigest(userId: number, bot: MyBot): Promise<void> {
@@ -319,8 +304,7 @@ export function registerReminderHandlers(bot: MyBot): void {
     const parts = args.match(/^(\S+)\s+(.+)$/s);
     if (!parts) {
       await ctx.reply(
-        `⏰ *Set a Reminder*\n━━━━━━━━━━━━━━━━━━\n\nUsage: /remind <time> <message>\n\nExamples:\n• /remind 30m Check emails\n• /remind 2h Team call\n• /remind 1d Review report\n\nAlso: /reminders · /digest · /connect_gmail`,
-        { parse_mode: "Markdown" },
+        `⏰ Set a Reminder\n━━━━━━━━━━━━━━━━━━\n\nUsage: /remind <time> <message>\n\nExamples:\n• /remind 30m Check emails\n• /remind 2h Team call\n• /remind 1d Review report\n\nAlso: /reminders · /digest · /connect_gmail`,
       );
       return;
     }
@@ -348,8 +332,8 @@ export function registerReminderHandlers(bot: MyBot): void {
       hour12: true,
     });
     await ctx.reply(
-      `⏰ *Reminder Set!* (#${id})\n━━━━━━━━━━━━━━━━━━\n\n📌 ${md(label)}\n🕐 ${when} (Nairobi)`,
-      { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("⏰ My Reminders", "reminders:list") },
+      `⏰ Reminder Set! (#${id})\n━━━━━━━━━━━━━━━━━━\n\n📌 ${label}\n🕐 ${when} (Nairobi)`,
+      { reply_markup: new InlineKeyboard().text("⏰ My Reminders", "reminders:list") },
     );
   });
 
@@ -358,7 +342,7 @@ export function registerReminderHandlers(bot: MyBot): void {
     if (!(await checkAccess(ctx, "free"))) return;
     const rows = await listPendingReminders(ctx.from.id);
     if (rows.length === 0) {
-      await ctx.reply("⏰ *No pending reminders*\n\n/remind 2h Check the inbox", { parse_mode: "Markdown" });
+      await ctx.reply("⏰ No pending reminders\n\n/remind 2h Check the inbox");
       return;
     }
     const lines = rows
@@ -370,11 +354,10 @@ export function registerReminderHandlers(bot: MyBot): void {
           hour: "2-digit",
           minute: "2-digit",
         });
-        return `• #${r.id} — ${when}\n  ${md(r.label)}`;
+        return `• #${r.id} — ${when}\n  ${r.label}`;
       })
       .join("\n\n");
-    await ctx.reply(`⏰ *Pending* (${rows.length})\n━━━━━━━━━━━━━━━━━━\n\n${lines}`, {
-      parse_mode: "Markdown",
+    await ctx.reply(`⏰ Pending (${rows.length})\n━━━━━━━━━━━━━━━━━━\n\n${lines}`, {
       reply_markup: new InlineKeyboard().text("🗑️ Clear all", "reminders:clear_all"),
     });
   });
@@ -385,8 +368,7 @@ export function registerReminderHandlers(bot: MyBot): void {
 
     if (!isGmailOAuthAppConfigured()) {
       await ctx.reply(
-        "📧 *Gmail linking not available yet*\n\nOwner must set on Render:\n• GOOGLE_CLIENT_ID\n• GOOGLE_CLIENT_SECRET\n\nAnd add redirect URI:\n{your-render-url}/oauth/google/callback",
-        { parse_mode: "Markdown" },
+        "📧 Gmail linking not available yet\n\nOwner must set on Render:\n• GOOGLE_CLIENT_ID\n• GOOGLE_CLIENT_SECRET\n\nAnd add redirect URI:\nhttps://bot-command-central-1.onrender.com/oauth/google/callback",
       );
       return;
     }
@@ -395,14 +377,11 @@ export function registerReminderHandlers(bot: MyBot): void {
       const url = buildGmailAuthUrl(ctx.from.id);
       const existing = await getUserGmail(ctx.from.id);
       await ctx.reply(
-        `📧 *Connect your Gmail*\n━━━━━━━━━━━━━━━━━━\n\n` +
-          (existing?.email ? `Currently linked: ${md(existing.email)}\n\n` : "") +
+        `📧 Connect your Gmail\n━━━━━━━━━━━━━━━━━━\n\n` +
+          (existing?.email ? `Currently linked: ${existing.email}\n\n` : "") +
           `Tap below → choose Google account → allow read-only access.\n\n` +
           `Only used for your /inbox, /digest, and 10:00 Nairobi briefing.`,
-        {
-          parse_mode: "Markdown",
-          reply_markup: new InlineKeyboard().url("🔗 Connect Gmail", url),
-        },
+        { reply_markup: new InlineKeyboard().url("🔗 Connect Gmail", url) },
       );
     } catch (err) {
       await ctx.reply(`❌ ${err instanceof Error ? err.message : "Failed"}`);
@@ -421,7 +400,7 @@ export function registerReminderHandlers(bot: MyBot): void {
     if (!(await checkAccess(ctx, "free"))) return;
 
     if (!(await hasUserGmail(ctx.from.id))) {
-      await ctx.reply("📧 *No Gmail linked*\n\nUse /connect_gmail first.", { parse_mode: "Markdown" });
+      await ctx.reply("📧 No Gmail linked\n\nUse /connect_gmail first.");
       return;
     }
 
@@ -429,11 +408,7 @@ export function registerReminderHandlers(bot: MyBot): void {
     try {
       const briefing = await buildEmailBriefing(ctx.from.id);
       await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
-      try {
-        await ctx.reply(briefing, { parse_mode: "Markdown" });
-      } catch {
-        await ctx.reply(briefing.replace(/\*/g, "").replace(/_/g, ""));
-      }
+      await ctx.reply(briefing);
     } catch (err) {
       logger.error({ err }, "inbox scan failed");
       await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
@@ -452,15 +427,11 @@ export function registerReminderHandlers(bot: MyBot): void {
     const text =
       rows.length === 0
         ? "⏰ No pending reminders."
-        : `⏰ *Pending* (${rows.length})\n\n` +
+        : `⏰ Pending (${rows.length})\n\n` +
           rows
-            .map((r) => `• #${r.id} ${new Date(r.fire_at).toLocaleString("en-KE", { timeZone: "Africa/Nairobi" })}\n  ${md(r.label)}`)
+            .map((r) => `• #${r.id} ${new Date(r.fire_at).toLocaleString("en-KE", { timeZone: "Africa/Nairobi" })}\n  ${r.label}`)
             .join("\n\n");
-    try {
-      await ctx.reply(text, { parse_mode: "Markdown" });
-    } catch {
-      await ctx.reply(text.replace(/\*/g, ""));
-    }
+    await ctx.reply(text);
   });
 
   bot.callbackQuery("reminders:clear_all", async (ctx) => {
@@ -531,7 +502,7 @@ export function startTwoHourPingScheduler(bot: MyBot): void {
       const fired = await fireDueReminders(bot);
       const pending = await listPendingReminders(ownerId);
       let text =
-        `🔔 *2-HOUR PING*\n━━━━━━━━━━━━━━━━━━\n⏰ Fired: *${fired}*\n📌 Pending: *${pending.length}*\n`;
+        `🔔 2-HOUR PING\n━━━━━━━━━━━━━━━━━━\n⏰ Fired: ${fired}\n📌 Pending: ${pending.length}\n`;
       if (pending.length > 0) {
         text +=
           "\nNext up:\n" +
@@ -545,7 +516,7 @@ export function startTwoHourPingScheduler(bot: MyBot): void {
                 hour: "2-digit",
                 minute: "2-digit",
               });
-              return `• ${when} — ${md(r.label)}`;
+              return `• ${when} — ${r.label}`;
             })
             .join("\n");
       }
@@ -555,18 +526,14 @@ export function startTwoHourPingScheduler(bot: MyBot): void {
           const urgent = emails.slice(0, 3);
           if (urgent.length > 0) {
             text += "\n\n📧 Mail pulse\n";
-            text += urgent.map((e) => `• ${md(e.subject)} — ${md(e.from)}`).join("\n");
+            text += urgent.map((e) => `• ${e.subject} — ${e.from}`).join("\n");
           }
         } catch (err) {
           logger.warn({ err }, "2h email pulse failed");
         }
       }
       text += "\n\n/digest · /inbox · /reminders";
-      try {
-        await bot.api.sendMessage(ownerId, text, { parse_mode: "Markdown" });
-      } catch {
-        await bot.api.sendMessage(ownerId, text.replace(/\*/g, ""));
-      }
+      await bot.api.sendMessage(ownerId, text);
     } catch (err) {
       logger.error({ err }, "2h ping failed");
     }
