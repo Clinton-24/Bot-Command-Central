@@ -11,7 +11,7 @@ import { registerWelcomeHandler } from "./handlers/welcome";
 import { registerAntiSpamHandler } from "./handlers/antispam";
 import { registerMeetingHandlers, registerMeetingCallbacks } from "./handlers/meetings";
 import { registerHexagonHandlers, registerHexagonCallbacks, sendDailyGroupDigest } from "./handlers/hexagon";
-import { registerReminderHandlers, startDailyDigestScheduler } from "./handlers/reminders";
+import { registerReminderHandlers, startDailyDigestScheduler, startTwoHourPingScheduler } from "./handlers/reminders";
 import { registerBatteryHandlers } from "./handlers/battery";
 import { registerEmailHandlers, registerEmailCallbacks } from "./handlers/email";
 import { registerHexHandlers, registerHexCallbacks } from "./handlers/hex";
@@ -84,13 +84,13 @@ export function createBot(): MyBot {
   registerDbLogsCallbacks(bot);
 
   startDailyDigestScheduler(bot);
+  startTwoHourPingScheduler(bot);
 
   bot.catch((err) => {
     const e = err.error as { error_code?: number; description?: string } | Error;
     const desc = "description" in e ? e.description : e instanceof Error ? e.message : String(e);
     const code = "error_code" in e ? e.error_code : 0;
 
-    // Ignore harmless Telegram API errors — never crash the process over these
     const ignored = [
       "message is not modified",
       "query is too old",

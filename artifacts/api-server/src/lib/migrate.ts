@@ -196,6 +196,22 @@ export async function runMigrations(): Promise<void> {
       }
     }
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS bot_reminders (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        label TEXT NOT NULL,
+        fire_at TIMESTAMP NOT NULL,
+        sent_at TIMESTAMP,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+    `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS bot_reminders_due_idx
+      ON bot_reminders (fire_at)
+      WHERE sent_at IS NULL;
+    `);
+
     logger.info("Migrations complete ✅");
   } catch (err) {
     logger.error({ err }, "Migration failed ❌");
