@@ -6,6 +6,8 @@ import type { BotContext } from "../context";
 import { isOwner } from "../helpers";
 import { logger } from "../../lib/logger";
 
+// Hex Control Panel — CardShop admin (clean UTF-8)
+
 const CATEGORY_EMOJIS: Record<string, string> = {
   general: "📦",
   streaming: "📺",
