@@ -63,7 +63,6 @@ function providerForModel(model: string): ProviderName {
 
 function providersForModel(model: string): ProviderName[] {
   const direct = providerForModel(model);
-  // Prefer OpenRouter when only that key exists; always allow OpenRouter as fallback
   if (direct === "openrouter") return ["openrouter"];
   const hasDirect = Boolean(getProviderApiKey(direct));
   const hasOr = Boolean(getProviderApiKey("openrouter"));
@@ -239,37 +238,80 @@ export async function routeChat(task: TaskType, messages: ChatMessage[]): Promis
   throw new Error(`All configured AI models failed for ${task}. Last error: ${lastError}`);
 }
 
+/** Free / zero-cost OpenRouter image models tried first when account has no credits. */
+const FREE_IMAGE_MODELS = [
+  "inclusionai/ming-image-0.1-design",
+  "inclusionai/ming-image-0.1-design-layer",
+  "meta/muse-image",
+  "recraft/recraft-v4.1-flash",
+  "bytedance-seed/seedream-5-0-flash",
+];
+
+async function openRouterGenerateImage(
+  apiKey: string,
+  model: string,
+  prompt: string,
+  size: string,
+): Promise<GeneratedImage> {
+  const config = getModelConfig().providers.openrouter;
+  const body = await requestJson(`${config.baseUrl}/images`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      "HTTP-Referer": process.env.RENDER_EXTERNAL_URL ?? "https://bot-command-central-1.onrender.com",
+      "X-Title": "Crescent-AI",
+    },
+    body: JSON.stringify({
+      model,
+      prompt,
+      aspect_ratio: "1:1",
+      size,
+    }),
+  });
+  const data = Array.isArray(body.data) ? body.data as Array<{ url?: string; b64_json?: string }> : [];
+  const first = data[0];
+  if (!first?.url && !first?.b64_json) {
+    throw new Error(`OpenRouter image API returned no image for model ${model}`);
+  }
+  return { url: first.url, b64: first.b64_json, model };
+}
+
 /** Generate an image via OpenAI DALL-E or OpenRouter Images API. */
 export async function generateImage(prompt: string, size = "1024x1024"): Promise<GeneratedImage> {
   const openaiKey = getProviderApiKey("openai");
   const openrouterKey = getProviderApiKey("openrouter");
 
-  // Prefer OpenRouter Images API when that key is present (user's setup)
   if (openrouterKey) {
-    const model = process.env.IMAGE_MODEL ?? "google/gemini-2.5-flash-image";
-    const config = getModelConfig().providers.openrouter;
-    const body = await requestJson(`${config.baseUrl}/images`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${openrouterKey}`,
-        "Content-Type": "application/json",
-        "HTTP-Referer": process.env.RENDER_EXTERNAL_URL ?? "https://bot-command-central-1.onrender.com",
-        "X-Title": "Crescent-AI",
-      },
-      body: JSON.stringify({
-        model,
-        prompt,
-        aspect_ratio: "1:1",
-        // size shorthand also accepted by some endpoints
-        size,
-      }),
-    });
-    const data = Array.isArray(body.data) ? body.data as Array<{ url?: string; b64_json?: string }> : [];
-    const first = data[0];
-    if (!first?.url && !first?.b64_json) {
-      throw new Error(`OpenRouter image API returned no image for model ${model}`);
+    const preferred = process.env.IMAGE_MODEL;
+    const candidates = preferred
+      ? [preferred, ...FREE_IMAGE_MODELS.filter((m) => m !== preferred)]
+      : [...FREE_IMAGE_MODELS, "google/gemini-2.5-flash-image"];
+
+    let lastError = "No image model succeeded";
+    for (const model of candidates) {
+      try {
+        const result = await openRouterGenerateImage(openrouterKey, model, prompt, size);
+        logger.info({ model }, "Image generated via OpenRouter");
+        return result;
+      } catch (err) {
+        lastError = err instanceof Error ? err.message : "image request failed";
+        logger.warn({ model, err: lastError }, "OpenRouter image model failed");
+        // If account has never bought credits, keep trying free models then surface a clear tip
+        if (lastError.includes("402") || lastError.toLowerCase().includes("insufficient credits")) {
+          continue;
+        }
+      }
     }
-    return { url: first.url, b64: first.b64_json, model };
+
+    if (lastError.includes("402") || lastError.toLowerCase().includes("insufficient credits")) {
+      throw new Error(
+        "OpenRouter image generation needs credits (even small ones). " +
+          "Add credits at https://openrouter.ai/settings/credits  — or set OPENAI_API_KEY for DALL·E. " +
+          `Last error: ${lastError}`,
+      );
+    }
+    throw new Error(lastError);
   }
 
   if (openaiKey) {
