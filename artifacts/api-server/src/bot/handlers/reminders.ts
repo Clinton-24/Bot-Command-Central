@@ -269,9 +269,17 @@ export async function sendMorningBriefing(
 
   try {
     const products = await db.select().from(productsTable).where(eq(productsTable.isActive, true));
-    const lowStock = products.filter((p) => Number(p.stock) <= 5 && Number(p.stock) >= 0);
+    // Convention: stock === 0 means unlimited (same as shop UI). Low stock = 1–5 only.
+    const lowStock = products.filter((p) => {
+      const s = Number(p.stock);
+      return Number.isFinite(s) && s > 0 && s <= 5;
+    });
     text += `🛍️ *Shop*\n• Active products: ${products.length}\n`;
-    if (lowStock.length > 0) text += `• ⚠️ Low stock (LS): ${lowStock.map((p) => p.name).join(", ")}\n`;
+    if (lowStock.length > 0) {
+      text += `• ⚠️ Low stock (1–5 left): ${lowStock.map((p) => `${p.name} (${p.stock})`).join(", ")}\n`;
+    } else {
+      text += `• Stock: all unlimited or healthy\n`;
+    }
     text += `\n`;
   } catch (err) {
     logger.warn({ err }, "briefing shop failed");
