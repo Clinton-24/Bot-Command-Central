@@ -1,9 +1,11 @@
 import { getModelConfig, getProviderApiKey, getTaskModels, getTaskRoute, type ProviderName, type TaskType } from "./model-config";
 import { logger } from "./logger";
 
+export type ContentPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
+
 export interface ChatMessage {
   role: "system" | "user" | "assistant";
-  content: string;
+  content: string | ContentPart[];
 }
 
 export interface RoutedChatResponse {
@@ -18,11 +20,16 @@ export interface RoutedEmbeddingResponse {
   model: string;
 }
 
+export interface GeneratedImage {
+  url?: string;
+  b64?: string;
+  model: string;
+}
+
 type OpenAiResponse = { choices?: Array<{ message?: { content?: string | null } }> };
-type AnthropicResponse = { content?: Array<{ type?: string; text?: string }> };
 
 function providerForModel(model: string): ProviderName {
-  if (model.startsWith("gpt-") || model.startsWith("o1") || model.startsWith("o3") || model.startsWith("text-embedding-")) {
+  if (model.startsWith("gpt-") || model.startsWith("o1") || model.startsWith("o3") || model.startsWith("text-embedding-") || model.startsWith("dall-e")) {
     return "openai";
   }
   if (model.startsWith("claude-")) return "anthropic";
@@ -79,7 +86,7 @@ async function requestJson(
   }
 }
 
-function buildOpenAiMessages(messages: ChatMessage[]): ChatMessage[] {
+function buildOpenAiMessages(messages: ChatMessage[]): Array<{ role: string; content: unknown }> {
   return messages.map((message) => ({ role: message.role, content: message.content }));
 }
 
@@ -96,8 +103,32 @@ async function callProvider(
   if (!apiKey) throw new Error(`${providerConfig.apiKeyEnv} is not configured`);
 
   if (provider === "anthropic") {
-    const system = messages.filter((message) => message.role === "system").map((message) => message.content).join("\n\n");
-    const input = messages.filter((message) => message.role !== "system");
+    const system = messages
+      .filter((message) => message.role === "system")
+      .map((message) => (typeof message.content === "string" ? message.content : ""))
+      .join("\n\n");
+    const input = messages
+      .filter((message) => message.role !== "system")
+      .map((message) => {
+        if (typeof message.content === "string") {
+          return { role: message.role, content: message.content };
+        }
+        const parts = message.content.map((part) => {
+          if (part.type === "text") return { type: "text", text: part.text };
+          const url = part.image_url.url;
+          if (url.startsWith("data:")) {
+            const match = url.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+            if (match) {
+              return {
+                type: "image",
+                source: { type: "base64", media_type: match[1], data: match[2] },
+              };
+            }
+          }
+          return { type: "image", source: { type: "url", url } };
+        });
+        return { role: message.role, content: parts };
+      });
     const body = await requestJson(`${providerConfig.baseUrl}/messages`, {
       method: "POST",
       headers: {
@@ -172,6 +203,65 @@ export async function routeChat(task: TaskType, messages: ChatMessage[]): Promis
   }
 
   throw new Error(`All configured AI models failed for ${task}. Last error: ${lastError}`);
+}
+
+/** Generate an image from a text prompt (OpenAI DALL-E or OpenRouter image models). */
+export async function generateImage(prompt: string, size = "1024x1024"): Promise<GeneratedImage> {
+  const openaiKey = getProviderApiKey("openai");
+  const openrouterKey = getProviderApiKey("openrouter");
+
+  if (openaiKey) {
+    const config = getModelConfig().providers.openai;
+    const body = await requestJson(`${config.baseUrl}/images/generations`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${openaiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: process.env.IMAGE_MODEL ?? "dall-e-3",
+        prompt,
+        n: 1,
+        size,
+        response_format: "url",
+      }),
+    });
+    const data = Array.isArray(body.data) ? body.data as Array<{ url?: string; b64_json?: string }> : [];
+    const first = data[0];
+    if (!first?.url && !first?.b64_json) throw new Error("OpenAI image generation returned empty result");
+    return { url: first.url, b64: first.b64_json, model: process.env.IMAGE_MODEL ?? "dall-e-3" };
+  }
+
+  if (openrouterKey) {
+    const model = process.env.IMAGE_MODEL ?? "black-forest-labs/flux-1.1-pro";
+    const config = getModelConfig().providers.openrouter;
+    const body = await requestJson(`${config.baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${openrouterKey}`,
+        "Content-Type": "application/json",
+        "HTTP-Referer": process.env.RENDER_EXTERNAL_URL ?? "https://bot-command-central-1.onrender.com",
+        "X-Title": "Crescent-AI",
+      },
+      body: JSON.stringify({
+        model,
+        messages: [{ role: "user", content: prompt }],
+      }),
+    });
+    const choices = Array.isArray(body.choices) ? body.choices as OpenAiResponse["choices"] : [];
+    const content = normalizeContent(choices?.[0]?.message?.content);
+    const urlMatch = content.match(/https?:\/\/\S+\.(?:png|jpg|jpeg|webp|gif)/i)
+      ?? content.match(/!\[[^\]]*\]\((https?:\/\/[^)]+)\)/);
+    const url = urlMatch ? (urlMatch[1] ?? urlMatch[0]) : undefined;
+    if (!url) {
+      const anyUrl = content.match(/https?:\/\/\S+/);
+      if (anyUrl) return { url: anyUrl[0].replace(/[)\]>]+$/, ""), model };
+      throw new Error("OpenRouter image model did not return an image URL. Set OPENAI_API_KEY for DALL-E or configure IMAGE_MODEL.");
+    }
+    return { url: url.replace(/[)\]>]+$/, ""), model };
+  }
+
+  throw new Error("No image provider configured. Set OPENAI_API_KEY (DALL-E) or OPENROUTER_API_KEY + IMAGE_MODEL.");
 }
 
 export async function createEmbedding(input: string): Promise<RoutedEmbeddingResponse | null> {

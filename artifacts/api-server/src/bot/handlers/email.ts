@@ -39,7 +39,7 @@ export async function draftEmail(ctx: BotContext, brief: string): Promise<void> 
 
   try {
     const prompt = `Please draft a professional email for the following:\n\n${brief}\n\nFormat with Subject, then blank line, then body. End with [EMAIL_READY].`;
-    const draft = await askHexagon(userId, prompt);
+    const { reply: draft } = await askHexagon(userId, prompt);
 
     await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
 
@@ -57,7 +57,7 @@ export async function draftEmail(ctx: BotContext, brief: string): Promise<void> 
   } catch (err) {
     logger.error({ err }, "draftEmail error");
     await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
-    await ctx.reply("❌ Failed to draft email. Check your OpenAI API key.");
+    await ctx.reply("❌ Failed to draft email. Check your AI API keys.");
   }
 }
 
