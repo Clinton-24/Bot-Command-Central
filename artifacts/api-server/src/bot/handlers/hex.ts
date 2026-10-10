@@ -514,14 +514,13 @@ export function registerHexCallbacks(bot: MyBot): void {
       {
         parse_mode: "Markdown",
         reply_markup: new InlineKeyboard()
-          .text("💛 Set BNB/USDT-BEP20", "hex:pay_bnb")
+          .text("✏️ BNB Address", "hex:pay_bnb")
+          .text("✏️ TRC20", "hex:pay_trc20")
           .row()
-          .text("Set TRC20", "hex:pay_trc20")
+          .text("✏️ BTC", "hex:pay_btc")
+          .text("✏️ ETH", "hex:pay_eth")
           .row()
-          .text("🟠 Set BTC", "hex:pay_btc")
-          .text("💠 Set ETH", "hex:pay_eth")
-          .row()
-          .text("🔑 Set xpub", "hex:pay_xpub")
+          .text("✏️ xpub", "hex:pay_xpub")
           .row()
           .text("🔙 Hex Panel", "hex:main"),
       }
@@ -529,34 +528,38 @@ export function registerHexCallbacks(bot: MyBot): void {
   });
 
   bot.callbackQuery("hex:pay_bnb", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) return ctx.answerCallbackQuery("⛔");
+    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
     ctx.session.pendingAction = "hex:set_bnb";
     await ctx.answerCallbackQuery();
-    await ctx.reply("💛 BNB / USDT-BEP20 address:\n\nPaste your wallet address:");
+    await ctx.reply("Paste your BNB / USDT-BEP20 address:");
   });
+
   bot.callbackQuery("hex:pay_trc20", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) return ctx.answerCallbackQuery("⛔");
+    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
     ctx.session.pendingAction = "hex:set_trc20";
     await ctx.answerCallbackQuery();
-    await ctx.reply("USDT-TRC20 address:\n\nPaste your wallet address:");
+    await ctx.reply("Paste your USDT-TRC20 address:");
   });
+
   bot.callbackQuery("hex:pay_btc", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) return ctx.answerCallbackQuery("⛔");
+    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
     ctx.session.pendingAction = "hex:set_btc";
     await ctx.answerCallbackQuery();
-    await ctx.reply("🟠 BTC address:\n\nPaste your wallet address:");
+    await ctx.reply("Paste your BTC address:");
   });
+
   bot.callbackQuery("hex:pay_eth", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) return ctx.answerCallbackQuery("⛔");
+    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
     ctx.session.pendingAction = "hex:set_eth";
     await ctx.answerCallbackQuery();
-    await ctx.reply("💠 ETH address:\n\nPaste your wallet address:");
+    await ctx.reply("Paste your ETH address:");
   });
+
   bot.callbackQuery("hex:pay_xpub", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) return ctx.answerCallbackQuery("⛔");
+    if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery("⛔"); return; }
     ctx.session.pendingAction = "hex:set_xpub";
     await ctx.answerCallbackQuery();
-    await ctx.reply("🔑 xpub for BNB/BSC:\n\nPaste your xpub key:");
+    await ctx.reply("Paste your BNB xpub (for unique per-order addresses):");
   });
 
   bot.callbackQuery("hex:stats", async (ctx) => {
@@ -578,21 +581,6 @@ export function registerHexCallbacks(bot: MyBot): void {
     );
   });
 
-  bot.callbackQuery("hex:access", async (ctx) => {
-    if (!ctx.from || !isOwner(ctx.from.id)) {
-      await ctx.answerCallbackQuery("⛔ Owner only.");
-      return;
-    }
-    await ctx.answerCallbackQuery();
-    await ctx.editMessageText(
-      `🔐 *ACCESS CONTROL*\n━━━━━━━━━━━━━━━━━━\n\nUse the main Access menu for invites, OTP, and tier management.`,
-      {
-        parse_mode: "Markdown",
-        reply_markup: new InlineKeyboard()
-          .text("🔐 Open Access", "menu:access")
-          .row()
-          .text("🔙 Hex Panel", "hex:main"),
-      }
-    );
-  });
+  // hex:access is handled by registerAccessHandlers in access.ts
+  // (shows full panel: users, pending, invites, tiers)
 }
