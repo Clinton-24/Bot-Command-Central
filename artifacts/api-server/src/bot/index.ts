@@ -10,7 +10,7 @@ import { registerOwnerHandlers } from "./handlers/owner";
 import { registerWelcomeHandler } from "./handlers/welcome";
 import { registerAntiSpamHandler } from "./handlers/antispam";
 import { registerMeetingHandlers, registerMeetingCallbacks } from "./handlers/meetings";
-import { registerHexagonHandlers, registerHexagonCallbacks, sendDailyGroupDigest } from "./handlers/hexagon";
+import { registerHexagonHandlers, registerHexagonCallbacks } from "./handlers/hexagon";
 import { registerReminderHandlers, startDailyDigestScheduler, startTwoHourPingScheduler } from "./handlers/reminders";
 import { registerBatteryHandlers } from "./handlers/battery";
 import { registerEmailHandlers, registerEmailCallbacks } from "./handlers/email";
@@ -20,6 +20,7 @@ import { registerSubscriptionHandlers } from "./handlers/subscription";
 import { registerAIAgentHandlers } from "./handlers/ai_agents";
 import { registerCardShopHandlers, registerCardShopCallbacks } from "./handlers/cardshop";
 import { registerDbLogsHandlers, registerDbLogsCallbacks } from "./handlers/dblogs";
+import { killSwitchMiddleware, registerKillHandlers } from "./handlers/kill";
 
 export type MyBot = Bot<BotContext>;
 
@@ -35,8 +36,12 @@ export function createBot(): MyBot {
     session({
       initial: (): SessionData => ({}),
       getSessionKey: (ctx) => ctx.from?.id?.toString(),
-    })
+    }),
   );
+
+  // Kill switch MUST be first after session — blocks all non-owner traffic instantly
+  bot.use(killSwitchMiddleware());
+  registerKillHandlers(bot);
 
   // Core
   registerMenuHandlers(bot);
