@@ -9,26 +9,75 @@ import {
   exchangeCodeAndSave,
   verifyOAuthState,
 } from "./lib/gmail";
-
-// ── Port ──────────────────────────────────────────────────────────────────────
+import {
+  activateKill,
+  deactivateKill,
+  getKillStatus,
+  isBotKilled,
+} from "./bot/handlers/kill";
 
 const rawPort = process.env["PORT"];
 if (!rawPort) throw new Error("PORT environment variable is required");
 const port = Number(rawPort);
 
-// ── Bot & routes ──────────────────────────────────────────────────────────────
-
 const bot = getBotInstance();
 registerBatteryWebhook(app, bot);
 app.post("/bot", webhookCallback(bot, "express"));
-// CryptoBot webhook
 app.use("/api", createCryptoBotRouter(bot));
 
 app.get("/health", (_req, res) => {
-  res.status(200).json({ status: "ok", uptime: process.uptime() });
+  const kill = getKillStatus();
+  res.status(200).json({
+    status: kill.killed ? "killed" : "ok",
+    uptime: process.uptime(),
+    kill,
+  });
 });
 
-// ── Gmail OAuth callback (per-user connect) ───────────────────────────────────
+// ── Kill switch HTTP (optional KILL_SECRET) ───────────────────────────────────
+
+function authorizeKill(req: { headers: Record<string, unknown>; query: Record<string, unknown> }): boolean {
+  const secret = process.env.KILL_SECRET;
+  if (!secret) return false;
+  const header = String(req.headers["x-kill-secret"] ?? "");
+  const q = String(req.query.key ?? "");
+  return header === secret || q === secret;
+}
+
+app.post("/admin/kill", (req, res) => {
+  if (!authorizeKill(req as any)) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  const hard = String((req as any).query?.hard ?? "") === "1";
+  activateKill("http");
+  if (hard) {
+    res.json({ ok: true, mode: "hard", message: "process exiting in 2s" });
+    logger.error("HARD KILL via HTTP — process.exit(1)");
+    setTimeout(() => process.exit(1), 2000);
+    return;
+  }
+  res.json({ ok: true, mode: "soft", ...getKillStatus() });
+});
+
+app.post("/admin/unkill", (req, res) => {
+  if (!authorizeKill(req as any)) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  deactivateKill();
+  res.json({ ok: true, ...getKillStatus() });
+});
+
+app.get("/admin/kill-status", (req, res) => {
+  if (!authorizeKill(req as any)) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  res.json({ ok: true, ...getKillStatus(), killed: isBotKilled() });
+});
+
+// ── Gmail OAuth callback ──────────────────────────────────────────────────────
 
 app.get("/oauth/google/callback", async (req, res) => {
   try {
@@ -52,10 +101,9 @@ app.get("/oauth/google/callback", async (req, res) => {
     try {
       await bot.api.sendMessage(
         userId,
-        `✅ *Gmail connected*\n━━━━━━━━━━━━━━━━━━\n\n` +
+        `✅ Gmail connected\n━━━━━━━━━━━━━━━━━━\n\n` +
           (email ? `📬 ${email}\n\n` : "") +
           `Your inbox will appear in:\n• /inbox\n• /digest\n• Daily 10:00 Nairobi briefing\n\n/disconnect_gmail to remove access.`,
-        { parse_mode: "Markdown" },
       );
     } catch (notifyErr) {
       logger.warn({ notifyErr, userId }, "Could not notify user after Gmail connect");
@@ -81,8 +129,6 @@ app.get("/oauth/google/callback", async (req, res) => {
   }
 });
 
-// ── Keep-alive (prevents Render free tier from sleeping) ──────────────────────
-
 function startKeepAlive(): void {
   const renderUrl = process.env.RENDER_EXTERNAL_URL?.replace(/\/$/, "");
   if (!renderUrl) {
@@ -99,8 +145,6 @@ function startKeepAlive(): void {
     }
   }, 4 * 60 * 1000);
 }
-
-// ── Server start ──────────────────────────────────────────────────────────────
 
 app.listen(port, async (err?: Error) => {
   if (err) {
