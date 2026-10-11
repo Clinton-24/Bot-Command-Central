@@ -31,8 +31,16 @@ export interface UserGmailConnection {
 
 const GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
 
+/** Trim env values — paste often leaves trailing newlines (%0A) → invalid_client */
+function googleClientId(): string {
+  return (process.env.GOOGLE_CLIENT_ID ?? "").trim().replace(/[\r\n]/g, "");
+}
+function googleClientSecret(): string {
+  return (process.env.GOOGLE_CLIENT_SECRET ?? "").trim().replace(/[\r\n]/g, "");
+}
+
 function oauthClientConfigured(): boolean {
-  return Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
+  return Boolean(googleClientId() && googleClientSecret());
 }
 
 export function isGmailOAuthAppConfigured(): boolean {
@@ -53,7 +61,7 @@ function redirectUri(): string {
 function signState(userId: number): string {
   const exp = Date.now() + 15 * 60 * 1000;
   const payload = `${userId}.${exp}`;
-  const secret = process.env.GOOGLE_CLIENT_SECRET ?? "state";
+  const secret = googleClientSecret() || "state";
   const sig = createHmac("sha256", secret).update(payload).digest("hex").slice(0, 24);
   return Buffer.from(`${payload}.${sig}`).toString("base64url");
 }
@@ -66,7 +74,7 @@ export function verifyOAuthState(state: string): number | null {
     const exp = Number(expStr);
     if (!Number.isFinite(exp) || Date.now() > exp) return null;
     const payload = `${userIdStr}.${expStr}`;
-    const secret = process.env.GOOGLE_CLIENT_SECRET ?? "state";
+    const secret = googleClientSecret() || "state";
     const expected = createHmac("sha256", secret).update(payload).digest("hex").slice(0, 24);
     const a = Buffer.from(sig);
     const b = Buffer.from(expected);
@@ -83,7 +91,7 @@ export function buildGmailAuthUrl(userId: number): string {
     throw new Error("Google OAuth not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET.");
   }
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
-  url.searchParams.set("client_id", process.env.GOOGLE_CLIENT_ID!);
+  url.searchParams.set("client_id", googleClientId());
   url.searchParams.set("redirect_uri", redirectUri());
   url.searchParams.set("response_type", "code");
   url.searchParams.set("scope", GMAIL_SCOPE);
@@ -109,7 +117,6 @@ export async function getUserGmail(userId: number): Promise<UserGmailConnection 
 
 export async function hasUserGmail(userId: number): Promise<boolean> {
   if (await getUserGmail(userId)) return true;
-  // Legacy owner env token
   if (String(userId) === process.env.BOT_OWNER_ID && process.env.GMAIL_REFRESH_TOKEN) {
     return oauthClientConfigured();
   }
@@ -133,8 +140,8 @@ async function getAccessToken(refreshToken: string): Promise<string> {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      client_id: process.env.GOOGLE_CLIENT_ID!,
-      client_secret: process.env.GOOGLE_CLIENT_SECRET!,
+      client_id: googleClientId(),
+      client_secret: googleClientSecret(),
       refresh_token: refreshToken,
       grant_type: "refresh_token",
     }),
@@ -158,8 +165,8 @@ export async function exchangeCodeAndSave(userId: number, code: string): Promise
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
       code,
-      client_id: process.env.GOOGLE_CLIENT_ID!,
-      client_secret: process.env.GOOGLE_CLIENT_SECRET!,
+      client_id: googleClientId(),
+      client_secret: googleClientSecret(),
       redirect_uri: redirectUri(),
       grant_type: "authorization_code",
     }),
@@ -237,7 +244,6 @@ function decodeBody(payload: any): string {
   return "";
 }
 
-/** Fetch recent inbox for a specific user (their connected Gmail). */
 export async function fetchRecentEmailsForUser(
   userId: number,
   options?: { maxResults?: number; query?: string },
@@ -295,7 +301,6 @@ export async function fetchRecentEmailsForUser(
   return messages;
 }
 
-/** Legacy helper — owner env token only. Prefer fetchRecentEmailsForUser. */
 export async function fetchRecentEmails(options?: {
   maxResults?: number;
   query?: string;
