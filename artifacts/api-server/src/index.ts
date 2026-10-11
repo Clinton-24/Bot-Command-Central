@@ -8,6 +8,7 @@ import { createCryptoBotRouter } from "./bot/handlers/cryptobot";
 import {
   exchangeCodeAndSave,
   verifyOAuthState,
+  isGmailOAuthAppConfigured,
 } from "./lib/gmail";
 import {
   activateKill,
@@ -15,6 +16,7 @@ import {
   getKillStatus,
   isBotKilled,
 } from "./bot/handlers/kill";
+import { pool } from "@workspace/db";
 
 const rawPort = process.env["PORT"];
 if (!rawPort) throw new Error("PORT environment variable is required");
@@ -25,16 +27,40 @@ registerBatteryWebhook(app, bot);
 app.post("/bot", webhookCallback(bot, "express"));
 app.use("/api", createCryptoBotRouter(bot));
 
-app.get("/health", (_req, res) => {
+// Root — keep-alives / monitors often hit /
+app.get("/", (_req, res) => {
   const kill = getKillStatus();
   res.status(200).json({
+    service: "Bot-Command-Central",
     status: kill.killed ? "killed" : "ok",
+    health: "/health",
     uptime: process.uptime(),
-    kill,
   });
 });
 
-// ── Kill switch HTTP (optional KILL_SECRET) ───────────────────────────────────
+app.get("/health", async (_req, res) => {
+  const kill = getKillStatus();
+  let dbOk = false;
+  let dbError: string | undefined;
+  try {
+    await pool.query("SELECT 1");
+    dbOk = true;
+  } catch (e) {
+    dbError = e instanceof Error ? e.message : String(e);
+  }
+
+  const body = {
+    status: !dbOk ? "degraded" : kill.killed ? "killed" : "ok",
+    uptime: process.uptime(),
+    kill,
+    database: dbOk ? "ok" : "error",
+    ...(dbError ? { databaseError: dbError } : {}),
+    gmailOAuthConfigured: isGmailOAuthAppConfigured(),
+    timestamp: new Date().toISOString(),
+  };
+
+  res.status(dbOk ? 200 : 503).json(body);
+});
 
 function authorizeKill(req: { headers: Record<string, unknown>; query: Record<string, unknown> }): boolean {
   const secret = process.env.KILL_SECRET;
@@ -76,8 +102,6 @@ app.get("/admin/kill-status", (req, res) => {
   }
   res.json({ ok: true, ...getKillStatus(), killed: isBotKilled() });
 });
-
-// ── Gmail OAuth callback ──────────────────────────────────────────────────────
 
 app.get("/oauth/google/callback", async (req, res) => {
   try {
