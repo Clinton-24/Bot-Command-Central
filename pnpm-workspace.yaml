@@ -127,6 +127,10 @@ overrides:
   "@expo/ngrok-bin>@expo/ngrok-bin-win32-x64": "-"
   "@esbuild-kit/esm-loader": "npm:tsx@^4.21.0"
   esbuild: "0.27.3"
+  nodemailer: ">=10.0.6"
+  source-map-js: ">=1.2.2"
+  proxy-addr: ">=2.0.8"
+  fast-copy: ">=4.1.0"
 
 allowBuilds:
   esbuild: true
