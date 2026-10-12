@@ -37,7 +37,6 @@ export function mainMenuKeyboard(userId?: number): InlineKeyboard {
 export async function sendMainMenu(ctx: BotContext): Promise<void> {
   const userId = ctx.from?.id;
 
-  // Non-owners must have approved access
   if (userId && !isOwner(userId)) {
     const { getAccess } = await import("./access");
     const access = await getAccess(userId).catch(() => null);
@@ -47,13 +46,22 @@ export async function sendMainMenu(ctx: BotContext): Promise<void> {
       const gateText =
         `⚡ *BOT-COMMAND-CENTRAL*\n━━━━━━━━━━━━━━━━━━\n\n` +
         `Welcome, *${name}*.\n\n` +
-        `🔐 This is a *private platform*.\nAccess is by approval only.`;
+        `🔐 Private platform.\n\n` +
+        `🟢 *Free* — only if referred by an *active* user (@username or ID). Limited shop + 10 Crescent queries/day.\n\n` +
+        `No referral? Buy *Premium* or *VIP* for instant access.`;
       const gateKb = new InlineKeyboard()
-        .text("🔑 Request Access", "access:request")
-        .text("🎟️ I Have a Code", "access:invite");
+        .text("🎟️ Enter referral / code", "access:invite")
+        .row()
+        .text("💳 Buy Premium / VIP", "access:plans")
+        .row()
+        .text("🔑 Ask owner (free request)", "access:request");
       if (ctx.callbackQuery) {
+        try {
+          await ctx.answerCallbackQuery();
+        } catch {
+          /* already answered */
+        }
         await ctx.editMessageText(gateText, { parse_mode: "Markdown", reply_markup: gateKb });
-        await ctx.answerCallbackQuery();
       } else {
         await ctx.reply(gateText, { parse_mode: "Markdown", reply_markup: gateKb });
       }
@@ -61,12 +69,18 @@ export async function sendMainMenu(ctx: BotContext): Promise<void> {
     }
 
     if (!access.isApproved && access.isPending) {
-      const pendingText = `⏳ *Pending Approval*\n━━━━━━━━━━━━━━━━━━\n\nYour request is being reviewed.\n_You\'ll be notified once approved._`;
+      const pendingText =
+        `⏳ *Pending Approval*\n━━━━━━━━━━━━━━━━━━\n\nYour request is being reviewed.\n_You'll be notified once approved._\n\nOr buy access now:`;
+      const pendingKb = new InlineKeyboard().text("💳 Buy Premium / VIP", "access:plans");
       if (ctx.callbackQuery) {
-        await ctx.editMessageText(pendingText, { parse_mode: "Markdown" });
-        await ctx.answerCallbackQuery();
+        try {
+          await ctx.answerCallbackQuery();
+        } catch {
+          /* */
+        }
+        await ctx.editMessageText(pendingText, { parse_mode: "Markdown", reply_markup: pendingKb });
       } else {
-        await ctx.reply(pendingText, { parse_mode: "Markdown" });
+        await ctx.reply(pendingText, { parse_mode: "Markdown", reply_markup: pendingKb });
       }
       return;
     }
@@ -78,8 +92,12 @@ export async function sendMainMenu(ctx: BotContext): Promise<void> {
     `Welcome! Select a service:`;
   const kb = mainMenuKeyboard(ctx.from?.id);
   if (ctx.callbackQuery) {
+    try {
+      await ctx.answerCallbackQuery();
+    } catch {
+      /* */
+    }
     await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: kb });
-    await ctx.answerCallbackQuery();
   } else {
     await ctx.reply(text, { parse_mode: "Markdown", reply_markup: kb });
   }
@@ -136,7 +154,6 @@ export function meetingsMenuKeyboard(): InlineKeyboard {
 }
 
 export function registerMenuHandlers(bot: MyBot): void {
-  // Note: bot instance is passed through for access control
   bot.on("message", async (ctx, next) => {
     await logGroupMessage(ctx);
     return next();
@@ -188,42 +205,62 @@ export function registerMenuHandlers(bot: MyBot): void {
     await sendMainMenu(ctx);
   });
 
-  // Legacy shop callback — redirect to new CardShop
   bot.callbackQuery("menu:shop", async (ctx) => {
+    try {
+      await ctx.answerCallbackQuery();
+    } catch {
+      /* */
+    }
     await ctx.editMessageText(
       `🛍️ *CARDSHOP*\n━━━━━━━━━━━━━━━━━━\n\nBrowse and buy digital products.`,
-      { parse_mode: "Markdown", reply_markup: cardShopRedirectKeyboard() }
+      { parse_mode: "Markdown", reply_markup: cardShopRedirectKeyboard() },
     );
-    await ctx.answerCallbackQuery();
   });
 
   bot.callbackQuery("menu:cards", async (ctx) => {
+    try {
+      await ctx.answerCallbackQuery();
+    } catch {
+      /* */
+    }
     await ctx.editMessageText(
       `💳 *CARD TOOLS*\n━━━━━━━━━━━━━━━━━━\n\nFree card utilities and BIN lookup.`,
-      { parse_mode: "Markdown", reply_markup: cardMenuKeyboard() }
+      { parse_mode: "Markdown", reply_markup: cardMenuKeyboard() },
     );
-    await ctx.answerCallbackQuery();
   });
 
   bot.callbackQuery("menu:social", async (ctx) => {
+    try {
+      await ctx.answerCallbackQuery();
+    } catch {
+      /* */
+    }
     const isPrivate = ctx.chat?.type === "private";
     const note = isPrivate ? "" : "\n\n⚠️ _Switch to DM with the bot to use these tools._";
     await ctx.editMessageText(
       `📥 *SOCIAL TOOLS*\n━━━━━━━━━━━━━━━━━━\n\nFetch metadata from social URLs.${note}`,
-      { parse_mode: "Markdown", reply_markup: socialMenuKeyboard() }
+      { parse_mode: "Markdown", reply_markup: socialMenuKeyboard() },
     );
-    await ctx.answerCallbackQuery();
   });
 
   bot.callbackQuery("menu:meetings", async (ctx) => {
+    try {
+      await ctx.answerCallbackQuery();
+    } catch {
+      /* */
+    }
     await ctx.editMessageText(
       `📅 *MEETINGS*\n━━━━━━━━━━━━━━━━━━\n\nSchedule and manage meetings.`,
-      { parse_mode: "Markdown", reply_markup: meetingsMenuKeyboard() }
+      { parse_mode: "Markdown", reply_markup: meetingsMenuKeyboard() },
     );
-    await ctx.answerCallbackQuery();
   });
 
   bot.callbackQuery("menu:help", async (ctx) => {
+    try {
+      await ctx.answerCallbackQuery();
+    } catch {
+      /* */
+    }
     const isOwnerUser = ctx.from && isOwner(ctx.from.id);
     const text =
       `❓ *COMMAND REFERENCE*\n` +
@@ -240,22 +277,20 @@ export function registerMenuHandlers(bot: MyBot): void {
       `/schedule · /meetings\n\n` +
       `🤖 *Crescent AI*\n` +
       `/crescent · /ai [question]\n` +
-      (isOwnerUser
-        ? `/email [brief] · /remind <time> <msg>\n` +
-          `/reminders · /digest · /battery · /analyse\n`
-        : "") +
       `/clearai\n\n` +
+      `🩺 *Status*\n` +
+      `/health\n\n` +
       `👥 *Group Admin*\n` +
       `/warn · /ban · /mute · /unban · /unmute\n` +
       `/bl · /unbl · /bllist\n` +
       `/links · /forwards · /captcha · /antispam\n` +
       `/setwelcome · /pin · /unpin · /settings\n\n` +
       `📢 *Owner*\n` +
-      `/broadcast · /stats`;
+      `/broadcast · /stats` +
+      (isOwnerUser ? `\n/kill · /unkill · /hex · /access` : "");
     await ctx.editMessageText(text, {
       parse_mode: "Markdown",
       reply_markup: new InlineKeyboard().text("🔙 Main Menu", "menu:main"),
     });
-    await ctx.answerCallbackQuery();
   });
 }
