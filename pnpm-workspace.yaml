@@ -1,34 +1,11 @@
 # ============================================================================
 # SECURITY: Minimum release age for npm packages (supply-chain attack defense)
 # ============================================================================
-#
-# This setting requires that any npm package version must have been published
-# for at least 1 day (1440 minutes) before pnpm will allow installing it.
-# This is a critical defense against supply-chain attacks. In most cases,
-# malicious npm releases are discovered and pulled within hours, so a 1-day
-# delay provides a strong safety buffer.
-#
-# DO NOT DISABLE THIS SETTING. Removing or setting it to 0 is considered
-# extremely dangerous and leaves the entire workspace vulnerable to supply-
-# chain attacks, which have been the #1 vector for npm ecosystem compromises.
-#
-# If you absolutely need to install a package before the 1-day window has
-# passed (e.g. an urgent security bugfix), you can add it to the
-# `minimumReleaseAgeExclude` allowlist below. Only consider doing this for
-# packages released by trusted organizations with an impeccable security
-# posture (e.g. Replit packsges, react from Meta, typescript from Microsoft). Even then,
-# remove the exclusion once the 1-day window has passed.
-#
-# ============================================================================
 minimumReleaseAge: 1440
 
 minimumReleaseAgeExclude:
   - '@replit/*'
   - stripe-replit-sync
-  - nodemailer
-  - orval
-  - esbuild
-  - vite
 
 packages:
   - artifacts/*
@@ -56,7 +33,7 @@ catalog:
   tailwind-merge: ^3.3.1
   tailwindcss: ^4.1.14
   tsx: ^4.21.0
-  vite: ^7.3.5
+  vite: ^7.3.2
   wouter: ^3.3.5
   zod: ^3.25.76
 
@@ -149,22 +126,7 @@ overrides:
   "@expo/ngrok-bin>@expo/ngrok-bin-win32-ia32": "-"
   "@expo/ngrok-bin>@expo/ngrok-bin-win32-x64": "-"
   "@esbuild-kit/esm-loader": "npm:tsx@^4.21.0"
-  esbuild: ">=0.28.1"
-  # Security patches (Dependabot — Oct 2026)
-  nodemailer: ">=10.0.2"
-  brace-expansion: ">=5.0.11"
-  js-yaml: ">=4.3.2"
-  qs: ">=6.16.0"
-  nanoid: ">=3.3.18"
-  postcss: ">=8.5.23"
-  fast-uri: ">=3.1.6"
-  markdown-it: ">=14.3.1"
-  linkify-it: ">=5.0.2"
-  ws: ">=8.21.0"
-  body-parser: ">=2.3.0"
-  browserslist: ">=4.28.7"
-  baseline-browser-mapping: ">=2.11.0"
-  "@babel/core": ">=7.29.6"
+  esbuild: "0.27.3"
 
 allowBuilds:
   esbuild: true
