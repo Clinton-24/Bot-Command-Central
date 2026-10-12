@@ -30,6 +30,26 @@ import {
 } from "../../lib/model-router";
 import type { TaskType } from "../../lib/model-config";
 
+/** Prevent duplicate replies when Telegram retries slow vision webhooks */
+const inFlightUpdates = new Set<string>();
+const recentlyHandled = new Map<string, number>();
+const DEDUPE_TTL_MS = 120_000;
+
+function claimUpdate(key: string): boolean {
+  const now = Date.now();
+  for (const [k, t] of recentlyHandled) {
+    if (now - t > DEDUPE_TTL_MS) recentlyHandled.delete(k);
+  }
+  if (inFlightUpdates.has(key) || recentlyHandled.has(key)) return false;
+  inFlightUpdates.add(key);
+  return true;
+}
+
+function releaseUpdate(key: string, success: boolean): void {
+  inFlightUpdates.delete(key);
+  if (success) recentlyHandled.set(key, Date.now());
+}
+
 async function buildShopContext(): Promise<string> {
   try {
     const [products, orders] = await Promise.all([
@@ -137,10 +157,9 @@ async function buildSystemPrompt(ctx?: BotContext, mode: "default" | "secretary"
   if (mode === "secretary") {
     return `You are CRESCENT acting as an elite executive secretary for Bot-Command-Central.\n\nProduce a DAILY BRIEFING in this exact style (Telegram Markdown):\n\n☀️ *Daily Briefing — {weekday, date}*\n📅 *Calendar*\n{today's meetings or "No events today"}\n📧 *Inbox / Ops snapshot*\n🔴 *Worth a look:* bullet priority items from shop, orders, meetings, group activity\nLow priority: quieter notes\n🚨 *Action required:* time-sensitive items only\n📰 *Context / arcs* (if any multi-day theme in the data)\n🎯 *Suggested focus for today* — 3 concrete actions ranked by urgency\n\nRules:\n- Be sharp, prioritising, no fluff\n- Never invent calendar events, products, or orders — only use live data below\n- If data is thin, say so honestly and still structure the briefing\n- Keep under ~400 words for mobile\n\nLIVE DATA:\n${shopCtx}\n\nMEETINGS (next 7 days):\n${meetingsCtx}\n${groupCtx ? `\n${groupCtx}` : ""}\n\nToday: ${today}`;
   }
-  return `You are CRESCENT, an elite AI agent in Bot-Command-Central.\n\nPERSONALITY: Sharp, direct, intelligent. No fluff.\n\nCAPABILITIES:\n1. GENERAL AI — research, writing, analysis, coding, math\n2. SHOP AGENT — use live shop data only; never invent prices/stock\n3. VISION — when an image is attached, describe and analyse it accurately. You CAN see images.\n4. SECRETARY — structured briefings, prioritisation, action lists\n5. GROUP ANALYST — when group context is present\n\n${shopCtx}\n${groupCtx ? `\n${groupCtx}` : ""}\n\nFORMAT: concise Telegram Markdown (*bold*, _italic_). Max ~300 words unless asked.\nToday: ${today}`;
+  return `You are CRESCENT, an elite AI agent in Bot-Command-Central.\n\nPERSONALITY: Sharp, direct, intelligent. No fluff.\n\nCAPABILITIES:\n1. GENERAL AI — research, writing, analysis, coding, math\n2. SHOP AGENT — use live shop data only; never invent prices/stock\n3. VISION — when an image is attached, describe and analyse it accurately. You CAN see images.\n4. SECRETARY — structured briefings, prioritisation, action lists\n5. GROUP ANALYST — when group context is present\n\n${shopCtx}\n${groupCtx ? `\n${groupCtx}` : ""}\n\nFORMAT: concise. Max ~300 words unless asked.\nToday: ${today}`;
 }
 
-/** Download Telegram photo and embed as base64 data URL (OpenRouter cannot fetch bot file URLs). */
 async function telegramPhotoDataUrl(bot: MyBot, fileId: string): Promise<string> {
   const file = await bot.api.getFile(fileId);
   if (!file.file_path) throw new Error("Telegram did not return a file path for this photo");
@@ -178,10 +197,10 @@ async function crescentIntroText(userId: number): Promise<string> {
   const quota = await getCrescentQuotaStatus(userId);
   const quotaText = quota.unlimited ? "Unlimited" : formatCrescentQuota(quota);
   return (
-    `🤖 *CRESCENT AI AGENT*\n━━━━━━━━━━━━━━━━━━\n\n` +
-    `_Shop-aware · Vision · Secretary · Image gen_\n\n` +
-    `📊 Quota: *${quotaText}*\n\n` +
-    `• Send a *photo* to analyse it\n` +
+    `🤖 CRESCENT AI AGENT\n━━━━━━━━━━━━━━━━━━\n\n` +
+    `Shop-aware · Vision · Secretary · Image gen\n\n` +
+    `📊 Quota: ${quotaText}\n\n` +
+    `• Send a photo to analyse it\n` +
     `• /imagine a cyberpunk market stall\n` +
     `• /briefing — daily secretary briefing\n` +
     `• Or just type a question`
@@ -203,9 +222,11 @@ async function askHexagon(
     ? (
       baseSystem +
       "\n\nVISION MODE (ACTIVE): An image is attached as multimodal content. " +
-      "You CAN and MUST see it. Never say you cannot read screenshots, images, or photos. " +
-      "Describe what is visible, extract any text (OCR), and answer based on the image. " +
-      "If it is a screenshot of UI/chat/email, transcribe key text and summarise."
+      "You CAN and MUST see it. " +
+      "Read the image ONCE. Extract all visible text in a single clean transcription. " +
+      "Do NOT repeat the same paragraph, list, or block of text. " +
+      "If the user asked to capture/write the text, output only the transcribed text (once). " +
+      "Otherwise: short description + one OCR block. Never say you cannot see images."
     )
     : baseSystem;
   let userContent: string | ContentPart[] = userMessage;
@@ -215,7 +236,7 @@ async function askHexagon(
         type: "text",
         text:
           userMessage ||
-          "Describe and analyse this image thoroughly. Extract all readable text. Summarise what it shows.",
+          "Extract all readable text from this image exactly once. Do not repeat any line. If there is little text, briefly describe the image.",
       },
       { type: "image_url", image_url: { url: imageUrl } },
     ];
@@ -239,44 +260,67 @@ export async function handleHexagonMessage(
 ): Promise<void> {
   const userId = ctx.from!.id;
   if (!(await checkCrescentAccess(ctx))) return;
+
+  const updateId = ctx.update?.update_id;
+  const msgId = ctx.message?.message_id ?? ctx.callbackQuery?.message?.message_id;
+  const dedupeKey =
+    updateId != null
+      ? `u:${updateId}`
+      : `m:${ctx.chat?.id ?? 0}:${msgId ?? 0}:${imageUrl ? "img" : "txt"}:${input.slice(0, 40)}`;
+  if (!claimUpdate(dedupeKey)) {
+    logger.info({ dedupeKey, userId }, "Skipping duplicate Crescent request");
+    return;
+  }
+
   ctx.session.pendingAction = "hexagon:input";
-  const thinking = await ctx.reply(
-    imageUrl ? `👁️ _Reading image..._` : `🧠 _Crescent thinking..._`,
-    { parse_mode: "Markdown" },
-  );
+  let thinkingId: number | undefined;
+  let ok = false;
   try {
+    const thinking = await ctx.reply(
+      imageUrl ? "👁️ Reading image..." : "🧠 Crescent thinking...",
+    );
+    thinkingId = thinking.message_id;
+
     const consumed = await consumeCrescentQuota(userId);
     if (!consumed.allowed) {
-      await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
+      if (thinkingId) await ctx.api.deleteMessage(ctx.chat!.id, thinkingId).catch(() => {});
       await ctx.reply(
-        `⚠️ *Quota exceeded*\n\n${formatCrescentQuota(consumed)}\n\nResets at midnight Nairobi time.`,
-        { parse_mode: "Markdown" },
+        `⚠️ Quota exceeded\n\n${formatCrescentQuota(consumed)}\n\nResets at midnight Nairobi time.`,
       );
+      ok = true;
       return;
     }
     const task: TaskType = imageUrl ? "vision" : "chat";
     const { reply } = await askHexagon(userId, input, ctx, task, imageUrl);
-    await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
-    await ctx.reply(`🤖 *CRESCENT*\n━━━━━━━━━━━━━━━━━━\n\n${reply}`, { parse_mode: "Markdown" });
+    if (thinkingId) await ctx.api.deleteMessage(ctx.chat!.id, thinkingId).catch(() => {});
+    const body = `🤖 CRESCENT\n━━━━━━━━━━━━━━━━━━\n\n${reply}`;
+    try {
+      if (imageUrl) await ctx.reply(body);
+      else await ctx.reply(body, { parse_mode: "Markdown" }).catch(() => ctx.reply(body));
+    } catch {
+      await ctx.reply(body);
+    }
+    ok = true;
   } catch (err) {
     logger.error({ err, userId }, "handleHexagonMessage failed");
-    await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
+    if (thinkingId) await ctx.api.deleteMessage(ctx.chat!.id, thinkingId).catch(() => {});
     await ctx.reply(
-      `❌ *Crescent error*\n\n${err instanceof Error ? err.message : "Unknown error"}`,
-      { parse_mode: "Markdown" },
+      `❌ Crescent error\n\n${err instanceof Error ? err.message : "Unknown error"}`,
     );
+  } finally {
+    releaseUpdate(dedupeKey, ok);
   }
 }
 
 async function runSecretaryBriefing(ctx: BotContext): Promise<void> {
   const userId = ctx.from!.id;
   if (!(await checkCrescentAccess(ctx))) return;
-  const thinking = await ctx.reply(`☀️ _Preparing daily briefing..._`, { parse_mode: "Markdown" });
+  const thinking = await ctx.reply("☀️ Preparing daily briefing...");
   try {
     const consumed = await consumeCrescentQuota(userId);
     if (!consumed.allowed) {
       await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
-      await ctx.reply(`⚠️ Quota exceeded. ${formatCrescentQuota(consumed)}`, { parse_mode: "Markdown" });
+      await ctx.reply(`⚠️ Quota exceeded. ${formatCrescentQuota(consumed)}`);
       return;
     }
     const system = await buildSystemPrompt(ctx, "secretary");
@@ -289,7 +333,7 @@ async function runSecretaryBriefing(ctx: BotContext): Promise<void> {
       },
     ]);
     await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
-    await ctx.reply(response.reply, { parse_mode: "Markdown" });
+    await ctx.reply(response.reply);
   } catch (err) {
     logger.error({ err }, "secretary briefing failed");
     await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
@@ -304,26 +348,24 @@ async function runImagine(ctx: BotContext, prompt: string): Promise<void> {
     await ctx.reply("Usage: /imagine a neon Tokyo street at night");
     return;
   }
-  const thinking = await ctx.reply(`🎨 _Generating image..._`, { parse_mode: "Markdown" });
+  const thinking = await ctx.reply("🎨 Generating image...");
   try {
     const consumed = await consumeCrescentQuota(userId);
     if (!consumed.allowed) {
       await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
-      await ctx.reply(`⚠️ Quota exceeded. ${formatCrescentQuota(consumed)}`, { parse_mode: "Markdown" });
+      await ctx.reply(`⚠️ Quota exceeded. ${formatCrescentQuota(consumed)}`);
       return;
     }
     const image = await generateImage(prompt.trim());
     await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
     if (image.url) {
       await ctx.replyWithPhoto(image.url, {
-        caption: `🎨 *${prompt.slice(0, 200)}*\n_${image.model}_`,
-        parse_mode: "Markdown",
+        caption: `🎨 ${prompt.slice(0, 200)}\n${image.model}`,
       });
     } else if (image.b64) {
       const buffer = Buffer.from(image.b64, "base64");
       await ctx.replyWithPhoto(new InputFile(buffer, "crescent.png"), {
-        caption: `🎨 *${prompt.slice(0, 200)}*\n_${image.model}_`,
-        parse_mode: "Markdown",
+        caption: `🎨 ${prompt.slice(0, 200)}\n${image.model}`,
       });
     } else {
       await ctx.reply("❌ Image generation returned no data.");
@@ -332,7 +374,7 @@ async function runImagine(ctx: BotContext, prompt: string): Promise<void> {
     logger.error({ err }, "imagine failed");
     await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
     await ctx.reply(
-      `❌ Image generation failed:\n${err instanceof Error ? err.message : "Unknown"}\n\n_Add OpenRouter credits or set OPENAI_API_KEY._`,
+      `❌ Image generation failed:\n${err instanceof Error ? err.message : "Unknown"}\n\nAdd OpenRouter credits or set OPENAI_API_KEY.`,
     );
   }
 }
@@ -342,14 +384,14 @@ export async function sendDailyDigest(userId: number, bot: MyBot): Promise<void>
     const products = await db.select().from(productsTable).where(eq(productsTable.isActive, true));
     const lowStock = products.filter((p) => Number(p.stock) <= 5 && Number(p.stock) > 0);
     const now = new Date();
-    let digest = `🌅 *GOOD MORNING — DAILY DIGEST*\n━━━━━━━━━━━━━━━━━━━━\n`;
+    let digest = `🌅 GOOD MORNING — DAILY DIGEST\n━━━━━━━━━━━━━━━━━━━━\n`;
     digest += `📅 ${now.toLocaleDateString("en-KE", { timeZone: "Africa/Nairobi", weekday: "long", month: "long", day: "numeric" })}\n\n`;
-    digest += `🛍️ *SHOP SNAPSHOT*\n• Active products: ${products.length}\n`;
+    digest += `🛍️ SHOP SNAPSHOT\n• Active products: ${products.length}\n`;
     if (lowStock.length > 0) digest += `• ⚠️ Low stock: ${lowStock.map((p) => p.name).join(", ")}\n`;
     const quota = await getCrescentQuotaStatus(userId);
-    digest += `\n🤖 *CRESCENT AI*\n• Quota: ${quota.unlimited ? "Unlimited" : formatCrescentQuota(quota)}\n`;
-    digest += `\n_Have a productive day! /crescent · /briefing · /imagine_`;
-    await bot.api.sendMessage(userId, digest, { parse_mode: "Markdown" });
+    digest += `\n🤖 CRESCENT AI\n• Quota: ${quota.unlimited ? "Unlimited" : formatCrescentQuota(quota)}\n`;
+    digest += `\nHave a productive day! /crescent · /briefing · /imagine`;
+    await bot.api.sendMessage(userId, digest);
   } catch (err) {
     logger.error({ err }, "sendDailyDigest error");
   }
@@ -362,7 +404,6 @@ export function registerHexagonHandlers(bot: MyBot): void {
     if (!input) {
       ctx.session.pendingAction = "hexagon:input";
       await ctx.reply(await crescentIntroText(ctx.from.id), {
-        parse_mode: "Markdown",
         reply_markup: crescentMenuKeyboard(),
       });
       return;
@@ -400,18 +441,28 @@ export function registerHexagonHandlers(bot: MyBot): void {
   bot.on("message:photo", async (ctx, next) => {
     if (!ctx.from || ctx.chat?.type !== "private") return next();
     if (!(await checkCrescentAccess(ctx))) return next();
+    const photoKey = `photo:${ctx.chat.id}:${ctx.message.message_id}`;
+    if (!claimUpdate(photoKey)) {
+      logger.info({ photoKey }, "Skipping duplicate photo update");
+      return;
+    }
     try {
       const photos = ctx.message.photo;
       const best = photos[photos.length - 1];
-      if (!best) return next();
+      if (!best) {
+        releaseUpdate(photoKey, false);
+        return next();
+      }
       const dataUrl = await telegramPhotoDataUrl(bot, best.file_id);
       const caption = ctx.message.caption?.trim() ?? "";
       await handleHexagonMessage(
         ctx,
-        caption || "Describe and analyse this image thoroughly. Extract all readable text.",
+        caption || "Extract all readable text from this image exactly once. Do not repeat any line.",
         dataUrl,
       );
+      releaseUpdate(photoKey, true);
     } catch (err) {
+      releaseUpdate(photoKey, false);
       logger.error({ err }, "photo analyse failed");
       await ctx.reply(`❌ Could not read photo: ${err instanceof Error ? err.message : "Unknown"}`);
     }
@@ -427,7 +478,6 @@ export function registerHexagonCallbacks(bot: MyBot): void {
     await ctx.answerCallbackQuery();
     ctx.session.pendingAction = "hexagon:input";
     await ctx.editMessageText(await crescentIntroText(ctx.from.id), {
-      parse_mode: "Markdown",
       reply_markup: crescentMenuKeyboard(),
     });
   });
@@ -439,7 +489,7 @@ export function registerHexagonCallbacks(bot: MyBot): void {
     }
     await ctx.answerCallbackQuery();
     ctx.session.pendingAction = "hexagon:input";
-    await ctx.reply("💬 *Chat with Crescent*\n\nType a message or send a photo.", { parse_mode: "Markdown" });
+    await ctx.reply("💬 Chat with Crescent\n\nType a message or send a photo.");
   });
 
   bot.callbackQuery("hexagon:shop", async (ctx) => {
@@ -449,7 +499,7 @@ export function registerHexagonCallbacks(bot: MyBot): void {
     }
     await ctx.answerCallbackQuery();
     ctx.session.pendingAction = "hexagon:input";
-    await ctx.reply(`🛍️ *Shop Q&A*\n\nAsk about products, orders, pricing, or stock.`, { parse_mode: "Markdown" });
+    await ctx.reply("🛍️ Shop Q&A\n\nAsk about products, orders, pricing, or stock.");
   });
 
   bot.callbackQuery("hexagon:briefing", async (ctx) => {
@@ -469,35 +519,34 @@ export function registerHexagonCallbacks(bot: MyBot): void {
     await ctx.answerCallbackQuery();
     ctx.session.pendingAction = "hexagon:imagine";
     await ctx.reply(
-      `🎨 *Image generation*\n\nSend: /imagine your prompt here\n\n_Example: /imagine a futuristic Nairobi skyline at sunset_`,
-      { parse_mode: "Markdown" },
+      "🎨 Image generation\n\nSend: /imagine your prompt here\n\nExample: /imagine a futuristic Nairobi skyline at sunset",
     );
   });
 
   bot.callbackQuery("hexagon:clear", async (ctx) => {
     if (!ctx.from || !(await checkCrescentAccess(ctx))) {
-      await ctx.answerCallbackQuery();
+      await ctx.answerCallbackQuery("⛔");
       return;
     }
+    await ctx.answerCallbackQuery();
     await clearMemory(ctx.from.id);
-    await ctx.answerCallbackQuery("🧹 Cleared");
     ctx.session.pendingAction = "hexagon:input";
-    await ctx.editMessageText(
-      `🤖 *CRESCENT*\n━━━━━━━━━━━━━━━━━━\n\n🧹 Memory cleared.\n\nType a message or send a photo.`,
-      { parse_mode: "Markdown", reply_markup: crescentMenuKeyboard() },
-    );
+    await ctx.reply("🤖 CRESCENT\n━━━━━━━━━━━━━━━━━━\n\n🧹 Memory cleared.\n\nType a message or send a photo.");
   });
 }
 
 export async function logGroupMessage(ctx: BotContext): Promise<void> {
-  const message = ctx.message;
-  if (!message || !ctx.from || ctx.chat?.type === "private") return;
+  if (!ctx.chat || ctx.chat.type === "private" || !ctx.from || !ctx.message) return;
   const text =
-    "text" in message ? message.text : "caption" in message ? message.caption : undefined;
-  if (!text?.trim()) return;
+    "text" in ctx.message && ctx.message.text
+      ? ctx.message.text
+      : "caption" in ctx.message && ctx.message.caption
+        ? ctx.message.caption
+        : "";
+  if (!text) return;
   try {
     await db.insert(groupMessagesTable).values({
-      chatId: ctx.chat!.id,
+      chatId: ctx.chat.id,
       userId: ctx.from.id,
       username: ctx.from.username ?? null,
       firstName: ctx.from.first_name ?? null,
@@ -506,49 +555,4 @@ export async function logGroupMessage(ctx: BotContext): Promise<void> {
   } catch (err) {
     logger.warn({ err }, "logGroupMessage failed");
   }
-}
-
-export async function sendDailyGroupDigest(bot: MyBot, chatId: number, ownerId: number): Promise<void> {
-  try {
-    const since = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const messages = await db
-      .select()
-      .from(groupMessagesTable)
-      .where(and(eq(groupMessagesTable.chatId, chatId), gte(groupMessagesTable.createdAt, since)))
-      .limit(300);
-    if (messages.length < 3) return;
-    const byUser = new Map<number, { name: string; count: number }>();
-    for (const m of messages) {
-      const e = byUser.get(m.userId) ?? {
-        name: m.firstName ?? m.username ?? String(m.userId),
-        count: 0,
-      };
-      e.count++;
-      byUser.set(m.userId, e);
-    }
-    const top = Array.from(byUser.entries()).sort((a, b) => b[1].count - a[1].count).slice(0, 5);
-    const digest =
-      `📊 *DAILY GROUP DIGEST*\n━━━━━━━━━━━━━━━━━━\n_${new Date().toDateString()}_\n\n` +
-      `📨 Total messages: *${messages.length}*\n` +
-      `👥 Active users: *${byUser.size}*\n\n` +
-      `🏆 *Top Contributors*\n` +
-      top.map(([, v], i) => `${i + 1}. ${v.name} — ${v.count} msgs`).join("\n");
-    await bot.api.sendMessage(ownerId, digest, { parse_mode: "Markdown" });
-  } catch (err) {
-    logger.error({ err }, "sendDailyGroupDigest failed");
-  }
-}
-
-export function scheduleReminder(bot: MyBot, userId: number, label: string, fireAt: Date): string {
-  const id = `${userId}-${Date.now()}`;
-  const delay = fireAt.getTime() - Date.now();
-  if (delay <= 0) return "";
-  setTimeout(async () => {
-    await bot.api.sendMessage(userId, `⏰ *REMINDER*\n\n${label}`, { parse_mode: "Markdown" }).catch(() => {});
-  }, delay);
-  return id;
-}
-
-export function clearAllReminders(_userId: number): number {
-  return 0;
 }
