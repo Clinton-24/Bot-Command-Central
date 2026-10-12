@@ -20,11 +20,43 @@ import { registerSubscriptionHandlers } from "./handlers/subscription";
 import { registerAIAgentHandlers } from "./handlers/ai_agents";
 import { registerCardShopHandlers, registerCardShopCallbacks } from "./handlers/cardshop";
 import { registerDbLogsHandlers, registerDbLogsCallbacks } from "./handlers/dblogs";
-import { killSwitchMiddleware, registerKillHandlers } from "./handlers/kill";
+import { killSwitchMiddleware, registerKillHandlers, getKillStatus } from "./handlers/kill";
+import { isGmailOAuthAppConfigured } from "../lib/gmail";
+import { pool } from "@workspace/db";
 
 export type MyBot = Bot<BotContext>;
 
 let botInstance: MyBot | null = null;
+
+/** Prevent Telegram button spinner hang if a handler forgets answerCallbackQuery */
+function autoAnswerCallbacks() {
+  return async (ctx: BotContext, next: () => Promise<void>) => {
+    if (!ctx.callbackQuery) return next();
+
+    let answered = false;
+    const original = ctx.answerCallbackQuery.bind(ctx);
+    ctx.answerCallbackQuery = async (params?: Parameters<typeof original>[0]) => {
+      answered = true;
+      return original(params as any);
+    };
+
+    const timer = setTimeout(() => {
+      if (!answered) {
+        original().catch(() => {});
+        answered = true;
+      }
+    }, 2500);
+
+    try {
+      await next();
+    } finally {
+      clearTimeout(timer);
+      if (!answered) {
+        await original().catch(() => {});
+      }
+    }
+  };
+}
 
 export function createBot(): MyBot {
   const token = process.env["TELEGRAM_BOT_TOKEN"];
@@ -41,7 +73,29 @@ export function createBot(): MyBot {
 
   // Kill switch MUST be first after session — blocks all non-owner traffic instantly
   bot.use(killSwitchMiddleware());
+  bot.use(autoAnswerCallbacks());
   registerKillHandlers(bot);
+
+  // Telegram /health — not the HTTP route
+  bot.command("health", async (ctx) => {
+    const kill = getKillStatus();
+    let dbOk = false;
+    try {
+      await pool.query("SELECT 1");
+      dbOk = true;
+    } catch {
+      dbOk = false;
+    }
+    const uptimeMin = Math.floor(process.uptime() / 60);
+    await ctx.reply(
+      `🩺 BOT HEALTH\n━━━━━━━━━━━━━━━━━━\n` +
+        `Status: ${kill.killed ? "KILLED" : "ok"}\n` +
+        `Database: ${dbOk ? "ok" : "error"}\n` +
+        `Gmail OAuth: ${isGmailOAuthAppConfigured() ? "configured" : "missing"}\n` +
+        `Uptime: ${uptimeMin} min\n` +
+        `Time: ${new Date().toISOString()}`,
+    );
+  });
 
   // Core
   registerMenuHandlers(bot);
