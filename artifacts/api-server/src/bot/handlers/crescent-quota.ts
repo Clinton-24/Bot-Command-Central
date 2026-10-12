@@ -7,7 +7,8 @@ import {
 } from "@workspace/db";
 import { isOwner } from "../helpers";
 
-export const CRESCENT_DAILY_LIMIT = 50;
+/** Free / approved users: 10 Crescent queries per Nairobi day. Owner = unlimited. */
+export const CRESCENT_DAILY_LIMIT = 10;
 export const CRESCENT_TOPUP_CREDITS = 20;
 export const CRESCENT_TOPUP_PRICE = 2;
 
@@ -28,11 +29,6 @@ function getNairobiDate(): string {
   }).format(new Date());
 }
 
-/**
- * Owner is always unlimited:
- * 1) BOT_OWNER_ID env match (primary)
- * 2) usersTable.isOwner flag (fallback)
- */
 async function isUnlimitedUser(userId: number): Promise<boolean> {
   if (isOwner(userId)) return true;
 
