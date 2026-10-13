@@ -21,6 +21,8 @@ import { registerAIAgentHandlers } from "./handlers/ai_agents";
 import { registerCardShopHandlers, registerCardShopCallbacks } from "./handlers/cardshop";
 import { registerDbLogsHandlers, registerDbLogsCallbacks } from "./handlers/dblogs";
 import { killSwitchMiddleware, registerKillHandlers, getKillStatus } from "./handlers/kill";
+import { activityAlertMiddleware, registerActivityCommands } from "./handlers/activity";
+import { createPgSessionStorage } from "../lib/session-store";
 import { isGmailOAuthAppConfigured } from "../lib/gmail";
 import { pool } from "@workspace/db";
 
@@ -67,6 +69,7 @@ export function createBot(): MyBot {
   bot.use(
     session({
       initial: (): SessionData => ({}),
+      storage: createPgSessionStorage<SessionData>(),
       getSessionKey: (ctx) => ctx.from?.id?.toString(),
     }),
   );
@@ -74,7 +77,10 @@ export function createBot(): MyBot {
   // Kill switch MUST be first after session — blocks all non-owner traffic instantly
   bot.use(killSwitchMiddleware());
   bot.use(autoAnswerCallbacks());
+  // Owner gets pinged when users become active (debounced)
+  bot.use(activityAlertMiddleware(bot));
   registerKillHandlers(bot);
+  registerActivityCommands(bot);
 
   // Telegram /health — not the HTTP route
   bot.command("health", async (ctx) => {

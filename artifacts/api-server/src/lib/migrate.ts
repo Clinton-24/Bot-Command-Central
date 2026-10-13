@@ -213,6 +213,22 @@ export async function runMigrations(): Promise<void> {
     `);
 
     await client.query(`
+      CREATE TABLE IF NOT EXISTS bot_sessions (
+        key TEXT PRIMARY KEY,
+        data JSONB NOT NULL DEFAULT '{}'::jsonb,
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS user_activity_alerts (
+        user_id BIGINT PRIMARY KEY,
+        last_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        last_alert_at TIMESTAMP
+      );
+    `);
+
+    await client.query(`
       CREATE TABLE IF NOT EXISTS user_gmail_tokens (
         user_id BIGINT PRIMARY KEY,
         refresh_token TEXT NOT NULL,
