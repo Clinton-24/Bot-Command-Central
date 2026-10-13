@@ -1,10 +1,23 @@
-import { getModelConfig, getProviderApiKey, getTaskModels, getTaskRoute, type ProviderName, type TaskType } from "./model-config";
 import { logger } from "./logger";
+import {
+  getModelConfig,
+  getProviderApiKey,
+  getTaskModels,
+  getTaskRoute,
+  type ProviderName,
+  type TaskType,
+} from "./model-config";
 
-export type ContentPart = { type: "text"; text: string } | { type: "image_url"; image_url: { url: string } };
+export type ChatRole = "system" | "user" | "assistant";
+
+export interface ContentPart {
+  type: "text" | "image_url";
+  text?: string;
+  image_url?: { url: string };
+}
 
 export interface ChatMessage {
-  role: "system" | "user" | "assistant";
+  role: ChatRole;
   content: string | ContentPart[];
 }
 
@@ -15,73 +28,49 @@ export interface RoutedChatResponse {
   task: TaskType;
 }
 
-export interface RoutedEmbeddingResponse {
-  embedding: number[];
-  model: string;
-}
-
 export interface GeneratedImage {
   url?: string;
   b64?: string;
   model: string;
 }
 
-type OpenAiResponse = { choices?: Array<{ message?: { content?: string | null } }> };
+interface OpenAiResponse {
+  choices?: Array<{ message?: { content?: string | ContentPart[] } }>;
+  error?: { message?: string };
+}
 
-/** Map bare model names to OpenRouter-qualified IDs. */
 function openRouterModelId(model: string): string {
   if (model.includes("/")) return model;
-  if (
-    model.startsWith("gpt-") ||
-    model.startsWith("o1") ||
-    model.startsWith("o3") ||
-    model.startsWith("dall-e") ||
-    model.startsWith("text-embedding-")
-  ) {
+  if (model.startsWith("gpt-") || model.startsWith("o1") || model.startsWith("text-embedding") || model.startsWith("dall-e")) {
     return `openai/${model}`;
   }
-  if (model.startsWith("claude-")) return `anthropic/${model}`;
+  if (model.startsWith("claude")) return `anthropic/${model}`;
   if (model.startsWith("gemini") || model.startsWith("gemma")) return `google/${model}`;
   return model;
 }
 
-/** Strip provider prefix for native OpenAI / Anthropic APIs. */
 function nativeModelId(model: string): string {
-  const slash = model.indexOf("/");
-  if (slash < 0) return model;
-  return model.slice(slash + 1);
-}
-
-function providerForModel(model: string): ProviderName {
-  const bare = nativeModelId(model);
-  if (bare.startsWith("gpt-") || bare.startsWith("o1") || bare.startsWith("o3") || bare.startsWith("dall-e") || bare.startsWith("text-embedding-")) {
-    return "openai";
-  }
-  if (bare.startsWith("claude-")) return "anthropic";
-  return "openrouter";
+  const parts = model.split("/");
+  return parts.length > 1 ? parts[parts.length - 1]!.replace(/:free$/, "") : model;
 }
 
 function providersForModel(model: string): ProviderName[] {
-  const direct = providerForModel(model);
+  const lower = model.toLowerCase();
+  const direct: ProviderName | null =
+    lower.includes("openai/") || lower.startsWith("gpt-") || lower.startsWith("o1")
+      ? "openai"
+      : lower.includes("anthropic/") || lower.startsWith("claude")
+        ? "anthropic"
+        : lower.includes("openrouter")
+          ? "openrouter"
+          : null;
   if (direct === "openrouter") return ["openrouter"];
-  const hasDirect = Boolean(getProviderApiKey(direct));
+  const hasDirect = direct ? Boolean(getProviderApiKey(direct)) : false;
   const hasOr = Boolean(getProviderApiKey("openrouter"));
-  if (hasDirect && hasOr) return [direct, "openrouter"];
-  if (hasDirect) return [direct];
+  if (hasDirect && hasOr) return [direct!, "openrouter"];
+  if (hasDirect) return [direct!];
   if (hasOr) return ["openrouter"];
-  return [direct, "openrouter"];
-}
-
-function normalizeContent(value: unknown): string {
-  if (typeof value === "string") return value.trim();
-  if (Array.isArray(value)) {
-    return value
-      .filter((part): part is { text?: string } => typeof part === "object" && part !== null)
-      .map((part) => part.text ?? "")
-      .join("")
-      .trim();
-  }
-  return "";
+  return direct ? [direct, "openrouter"] : ["openrouter"];
 }
 
 function backoffMs(attempt: number): number {
@@ -89,26 +78,18 @@ function backoffMs(attempt: number): number {
   return Math.min(5000, Math.round(retryBackoffBase ** attempt * 250));
 }
 
-async function requestJson(
-  url: string,
-  init: RequestInit,
-): Promise<Record<string, unknown>> {
+async function fetchJson(url: string, init: RequestInit): Promise<Record<string, unknown>> {
   const timeoutMs = getModelConfig().defaults.timeoutSeconds * 1000;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const response = await fetch(url, { ...init, signal: controller.signal });
-    const raw = await response.text();
-    let body: Record<string, unknown> = {};
-    try {
-      body = raw ? JSON.parse(raw) as Record<string, unknown> : {};
-    } catch {
-      body = {};
-    }
+    const body = (await response.json().catch(() => ({}))) as Record<string, unknown>;
     if (!response.ok) {
-      const error = typeof body.error === "object" && body.error !== null
-        ? (body.error as { message?: string }).message
-        : undefined;
+      const error =
+        typeof body.error === "object" && body.error !== null
+          ? (body.error as { message?: string }).message
+          : undefined;
       throw new Error(`${response.status} ${error ?? response.statusText}`);
     }
     return body;
@@ -117,8 +98,17 @@ async function requestJson(
   }
 }
 
-function buildOpenAiMessages(messages: ChatMessage[]): Array<{ role: string; content: unknown }> {
-  return messages.map((message) => ({ role: message.role, content: message.content }));
+function normalizeContent(content: string | ContentPart[] | undefined): string {
+  if (!content) return "";
+  if (typeof content === "string") return content.trim();
+  return content
+    .map((p) => (p.type === "text" ? p.text ?? "" : ""))
+    .join("")
+    .trim();
+}
+
+function buildOpenAiMessages(messages: ChatMessage[]) {
+  return messages.map((m) => ({ role: m.role, content: m.content as any }));
 }
 
 async function callProvider(
@@ -128,8 +118,7 @@ async function callProvider(
   maxTokens: number,
   temperature: number,
 ): Promise<string> {
-  const config = getModelConfig();
-  const providerConfig = config.providers[provider];
+  const providerConfig = getModelConfig().providers[provider];
   const apiKey = getProviderApiKey(provider);
   if (!apiKey) throw new Error(`${providerConfig.apiKeyEnv} is not configured`);
 
@@ -137,60 +126,49 @@ async function callProvider(
 
   if (provider === "anthropic") {
     const system = messages
-      .filter((message) => message.role === "system")
-      .map((message) => (typeof message.content === "string" ? message.content : ""))
+      .filter((m) => m.role === "system")
+      .map((m) => (typeof m.content === "string" ? m.content : normalizeContent(m.content)))
       .join("\n\n");
-    const input = messages
-      .filter((message) => message.role !== "system")
-      .map((message) => {
-        if (typeof message.content === "string") {
-          return { role: message.role, content: message.content };
-        }
-        const parts = message.content.map((part) => {
-          if (part.type === "text") return { type: "text", text: part.text };
-          const url = part.image_url.url;
-          if (url.startsWith("data:")) {
-            const match = url.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
-            if (match) {
-              return {
-                type: "image",
-                source: { type: "base64", media_type: match[1], data: match[2] },
-              };
-            }
-          }
-          return { type: "image", source: { type: "url", url } };
-        });
-        return { role: message.role, content: parts };
-      });
-    const body = await requestJson(`${providerConfig.baseUrl}/messages`, {
+    const nonSystem = messages.filter((m) => m.role !== "system");
+    const body = await fetchJson(`${providerConfig.baseUrl}/messages`, {
       method: "POST",
       headers: {
         "x-api-key": apiKey,
-        "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
+        "Content-Type": "application/json",
       },
       body: JSON.stringify({
         model: resolvedModel,
         max_tokens: maxTokens,
         temperature,
         system: system || undefined,
-        messages: input,
+        messages: nonSystem.map((m) => ({
+          role: m.role === "assistant" ? "assistant" : "user",
+          content: typeof m.content === "string" ? m.content : m.content,
+        })),
       }),
     });
-    const content = normalizeContent(body.content);
+    const content = Array.isArray(body.content)
+      ? (body.content as Array<{ type?: string; text?: string }>)
+          .filter((c) => c.type === "text")
+          .map((c) => c.text ?? "")
+          .join("")
+      : "";
     if (!content) throw new Error("Anthropic returned an empty response");
-    return content;
+    return content.trim();
   }
 
-  const body = await requestJson(`${providerConfig.baseUrl}/chat/completions`, {
+  const body = await fetchJson(`${providerConfig.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-      ...(provider === "openrouter" ? {
-        "HTTP-Referer": process.env.RENDER_EXTERNAL_URL ?? "https://bot-command-central-1.onrender.com",
-        "X-Title": "Crescent-AI",
-      } : {}),
+      ...(provider === "openrouter"
+        ? {
+            "HTTP-Referer": process.env.RENDER_EXTERNAL_URL ?? "https://bot-command-central",
+            "X-Title": "Bot-Command-Central Crescent",
+          }
+        : {}),
     },
     body: JSON.stringify({
       model: resolvedModel,
@@ -199,7 +177,7 @@ async function callProvider(
       messages: buildOpenAiMessages(messages),
     }),
   });
-  const choices = Array.isArray(body.choices) ? body.choices as OpenAiResponse["choices"] : [];
+  const choices = Array.isArray(body.choices) ? (body.choices as OpenAiResponse["choices"]) : [];
   const content = normalizeContent(choices?.[0]?.message?.content);
   if (!content) throw new Error(`${provider} returned an empty response`);
   return content;
@@ -213,7 +191,10 @@ export async function routeChat(task: TaskType, messages: ChatMessage[]): Promis
   for (const model of candidates) {
     for (const provider of providersForModel(model)) {
       const providerConfig = getModelConfig().providers[provider];
-      const supported = providerConfig.models.includes("*") || providerConfig.models.includes(nativeModelId(model)) || providerConfig.models.includes(model);
+      const supported =
+        providerConfig.models.includes("*") ||
+        providerConfig.models.includes(nativeModelId(model)) ||
+        providerConfig.models.includes(model);
       if (!supported && provider !== "openrouter") continue;
       if (!getProviderApiKey(provider)) {
         lastError = `${providerConfig.apiKeyEnv} is not configured`;
@@ -221,12 +202,26 @@ export async function routeChat(task: TaskType, messages: ChatMessage[]): Promis
       }
       for (let attempt = 0; attempt <= getModelConfig().defaults.maxRetries; attempt++) {
         try {
-          const reply = await callProvider(provider, model, messages, route.params.maxTokens, route.params.temperature);
+          const reply = await callProvider(
+            provider,
+            model,
+            messages,
+            route.params.maxTokens,
+            route.params.temperature,
+          );
           logger.info({ task, model, provider }, "AI model responded");
           return { reply, model, provider, task };
         } catch (err) {
           lastError = err instanceof Error ? err.message : "provider request failed";
           logger.warn({ task, model, provider, attempt, err: lastError }, "AI provider attempt failed");
+          const is429 =
+            /\b429\b/.test(lastError) ||
+            /rate.?limit/i.test(lastError) ||
+            /too many requests/i.test(lastError);
+          if (is429) {
+            await new Promise((resolve) => setTimeout(resolve, 2000 + attempt * 1500));
+            break;
+          }
           if (attempt < getModelConfig().defaults.maxRetries) {
             await new Promise((resolve) => setTimeout(resolve, backoffMs(attempt)));
           }
@@ -238,7 +233,6 @@ export async function routeChat(task: TaskType, messages: ChatMessage[]): Promis
   throw new Error(`All configured AI models failed for ${task}. Last error: ${lastError}`);
 }
 
-/** Free / zero-cost OpenRouter image models tried first when account has no credits. */
 const FREE_IMAGE_MODELS = [
   "inclusionai/ming-image-0.1-design",
   "inclusionai/ming-image-0.1-design-layer",
@@ -254,42 +248,35 @@ async function openRouterGenerateImage(
   size: string,
 ): Promise<GeneratedImage> {
   const config = getModelConfig().providers.openrouter;
-  const body = await requestJson(`${config.baseUrl}/images`, {
+  const body = await fetchJson(`${config.baseUrl}/images/generations`, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-      "HTTP-Referer": process.env.RENDER_EXTERNAL_URL ?? "https://bot-command-central-1.onrender.com",
-      "X-Title": "Crescent-AI",
+      "HTTP-Referer": process.env.RENDER_EXTERNAL_URL ?? "https://bot-command-central",
+      "X-Title": "Bot-Command-Central Crescent",
     },
-    body: JSON.stringify({
-      model,
-      prompt,
-      aspect_ratio: "1:1",
-      size,
-    }),
+    body: JSON.stringify({ model, prompt, size, response_format: "url" }),
   });
-  const data = Array.isArray(body.data) ? body.data as Array<{ url?: string; b64_json?: string }> : [];
-  const first = data[0];
+  const data = Array.isArray(body.data) ? body.data : [];
+  const first = data[0] as { url?: string; b64_json?: string } | undefined;
   if (!first?.url && !first?.b64_json) {
     throw new Error(`OpenRouter image API returned no image for model ${model}`);
   }
   return { url: first.url, b64: first.b64_json, model };
 }
 
-/** Generate an image via OpenAI DALL-E or OpenRouter Images API. */
 export async function generateImage(prompt: string, size = "1024x1024"): Promise<GeneratedImage> {
-  const openaiKey = getProviderApiKey("openai");
   const openrouterKey = getProviderApiKey("openrouter");
+  const openaiKey = getProviderApiKey("openai");
 
   if (openrouterKey) {
-    const preferred = process.env.IMAGE_MODEL;
-    const candidates = preferred
+    const preferred = process.env.IMAGE_MODEL?.trim();
+    const models = preferred
       ? [preferred, ...FREE_IMAGE_MODELS.filter((m) => m !== preferred)]
       : [...FREE_IMAGE_MODELS, "google/gemini-2.5-flash-image"];
-
     let lastError = "No image model succeeded";
-    for (const model of candidates) {
+    for (const model of models) {
       try {
         const result = await openRouterGenerateImage(openrouterKey, model, prompt, size);
         logger.info({ model }, "Image generated via OpenRouter");
@@ -297,17 +284,14 @@ export async function generateImage(prompt: string, size = "1024x1024"): Promise
       } catch (err) {
         lastError = err instanceof Error ? err.message : "image request failed";
         logger.warn({ model, err: lastError }, "OpenRouter image model failed");
-        // If account has never bought credits, keep trying free models then surface a clear tip
         if (lastError.includes("402") || lastError.toLowerCase().includes("insufficient credits")) {
           continue;
         }
       }
     }
-
     if (lastError.includes("402") || lastError.toLowerCase().includes("insufficient credits")) {
       throw new Error(
-        "OpenRouter image generation needs credits (even small ones). " +
-          "Add credits at https://openrouter.ai/settings/credits  — or set OPENAI_API_KEY for DALL·E. " +
+        "OpenRouter image generation needs credits. Add credits at https://openrouter.ai/settings/credits or set OPENAI_API_KEY. " +
           `Last error: ${lastError}`,
       );
     }
@@ -315,52 +299,28 @@ export async function generateImage(prompt: string, size = "1024x1024"): Promise
   }
 
   if (openaiKey) {
-    const config = getModelConfig().providers.openai;
-    const body = await requestJson(`${config.baseUrl}/images/generations`, {
+    const body = await fetchJson("https://api.openai.com/v1/images/generations", {
       method: "POST",
       headers: {
         Authorization: `Bearer ${openaiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: process.env.IMAGE_MODEL ?? "dall-e-3",
+        model: process.env.IMAGE_MODEL?.trim() || "dall-e-3",
         prompt,
-        n: 1,
         size,
-        response_format: "url",
+        n: 1,
       }),
     });
-    const data = Array.isArray(body.data) ? body.data as Array<{ url?: string; b64_json?: string }> : [];
-    const first = data[0];
+    const data = Array.isArray(body.data) ? body.data : [];
+    const first = data[0] as { url?: string; b64_json?: string } | undefined;
     if (!first?.url && !first?.b64_json) throw new Error("OpenAI image generation returned empty result");
-    return { url: first.url, b64: first.b64_json, model: process.env.IMAGE_MODEL ?? "dall-e-3" };
+    return { url: first.url, b64: first.b64_json, model: process.env.IMAGE_MODEL || "dall-e-3" };
   }
 
   throw new Error("No image provider configured. Set OPENROUTER_API_KEY or OPENAI_API_KEY.");
 }
 
-export async function createEmbedding(input: string): Promise<RoutedEmbeddingResponse | null> {
-  const config = getModelConfig();
-  const provider = "openai" as const;
-  const apiKey = getProviderApiKey(provider);
-  if (!apiKey) return null;
-
-  try {
-    const body = await requestJson(`${config.providers.openai.baseUrl}/embeddings`, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({ model: config.defaults.embedModel, input }),
-    });
-    const data = Array.isArray(body.data) ? body.data as Array<{ embedding?: unknown }> : [];
-    const embedding = data[0]?.embedding;
-    if (!Array.isArray(embedding) || embedding.length !== config.defaults.embedDim) return null;
-    return { embedding: embedding.map(Number), model: config.defaults.embedModel };
-  } catch (err) {
-    logger.warn({ err }, "AI embedding request failed; continuing without vector memory");
-    return null;
-  }
-}
-
-export function configuredModelCount(task: TaskType): number {
+export function countConfiguredModels(task: TaskType = "chat"): number {
   return getTaskModels(task).length;
 }
