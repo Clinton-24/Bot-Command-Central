@@ -1,10 +1,7 @@
 /**
  * ACCESS CONTROL SYSTEM
- * ──────────────────────────────────────────────────────────────────
- * Tiers:  free (approved) | premium | vip | blocked
- * Flow:   /start → request access → owner approves → user unlocked
- * Invites: owner generates codes → user starts with /start <code>
- * Guard:  checkAccess(ctx, "premium") → blocks if not high enough tier
+ * Tiers: free | premium | vip | blocked
+ * Invites: owner codes OR referral @username / Telegram ID
  */
 
 import { InlineKeyboard } from "grammy";
@@ -17,14 +14,10 @@ import { isOwner } from "../helpers";
 import { logger } from "../../lib/logger";
 import { checkCryptoBotInvoice, createCryptoBotInvoice, CRYPTOBOT_ASSETS, type CryptoBotAsset } from "./cryptobot";
 
-// ── Tier hierarchy ────────────────────────────────────────────────────────────
-
 const TIER_RANK: Record<string, number> = { free: 1, premium: 2, vip: 3 };
 export const TIER_EMOJI: Record<string, string> = { free: "🟢", premium: "💎", vip: "👑", blocked: "🚫" };
 export const TIER_LABEL: Record<string, string> = { free: "Free", premium: "Premium", vip: "VIP", blocked: "Blocked" };
-/** VIP plan: $10 / 30 days */
 export const VIP_MONTHLY_PRICE = 10;
-/** Premium plan: $20 / 30 days (override with PREMIUM_MONTHLY_PRICE env) */
 export const PREMIUM_MONTHLY_PRICE_DEFAULT = 20;
 
 export function premiumMonthlyPrice(): number {
@@ -39,8 +32,6 @@ export function tierMonthlyPrice(tier: "premium" | "vip"): number {
 export function tierRank(tier: string): number {
   return TIER_RANK[tier] ?? 0;
 }
-
-// ── Core access check ─────────────────────────────────────────────────────────
 
 export async function checkAccess(
   ctx: BotContext,
@@ -325,16 +316,53 @@ function escapeMarkdown(value: string): string {
   return value.replace(/([\\_*`\[])/g, "\\$1");
 }
 
-async function findRegisteredInviter(reference: string) {
+async function findRegisteredInviter(reference: string): Promise<{
+  id: number;
+  firstName: string | null;
+  username: string | null;
+} | null> {
   const normalizedReference = reference.trim().replace(/^@/, "");
+  if (!normalizedReference) return null;
 
-  const [inviter] = /^\d+$/.test(normalizedReference)
-    ? await db.select().from(usersTable).where(eq(usersTable.id, Number(normalizedReference)))
-    : await db.select().from(usersTable).where(sql`lower(${usersTable.username}) = lower(${normalizedReference})`);
-  if (!inviter || isOwner(inviter.id)) return inviter ?? null;
+  let inviter: { id: number; firstName: string | null; username: string | null } | null = null;
+
+  if (/^\d+$/.test(normalizedReference)) {
+    const id = Number(normalizedReference);
+    if (isOwner(id)) {
+      return { id, firstName: "Owner", username: null };
+    }
+    const [u] = await db.select().from(usersTable).where(eq(usersTable.id, id));
+    if (u) inviter = { id: u.id, firstName: u.firstName ?? null, username: u.username ?? null };
+    if (!inviter) {
+      const [a] = await db.select().from(accessTable).where(eq(accessTable.userId, id));
+      if (a) inviter = { id: a.userId, firstName: a.firstName ?? null, username: a.username ?? null };
+    }
+  } else {
+    const [u] = await db
+      .select()
+      .from(usersTable)
+      .where(sql`lower(${usersTable.username}) = lower(${normalizedReference})`);
+    if (u) {
+      inviter = { id: u.id, firstName: u.firstName ?? null, username: u.username ?? null };
+    } else {
+      const rows = await db
+        .select()
+        .from(accessTable)
+        .where(sql`lower(coalesce(${accessTable.username}, '')) = lower(${normalizedReference})`);
+      const a = rows[0];
+      if (a) inviter = { id: a.userId, firstName: a.firstName ?? null, username: a.username ?? null };
+    }
+  }
+
+  if (!inviter) return null;
+  if (isOwner(inviter.id)) return inviter;
 
   const [inviterAccess] = await db.select().from(accessTable).where(eq(accessTable.userId, inviter.id));
-  if (!inviterAccess?.isApproved || inviterAccess.tier === "blocked" || (inviterAccess.expiresAt && inviterAccess.expiresAt < new Date())) {
+  if (
+    !inviterAccess?.isApproved ||
+    inviterAccess.tier === "blocked" ||
+    (inviterAccess.expiresAt && inviterAccess.expiresAt < new Date())
+  ) {
     return null;
   }
   return inviter;
@@ -356,7 +384,7 @@ async function notifyOwnerReferral(
     `✅ *REFERRAL VERIFIED — ACCESS GRANTED*\n━━━━━━━━━━━━━━━━━━\n\n` +
       `👤 New user: ${userLabel}\n🆔 User ID: \`${user.id}\`\n\n` +
       `🤝 Invited by: ${inviterLabel}\n🆔 Inviter ID: \`${inviter.id}\`\n\n` +
-      `_The inviter is a registered bot user, so access was approved automatically._`,
+      `_Access approved automatically._`,
     { parse_mode: "Markdown" }
   ).catch((err) => logger.error({ err }, "notifyOwnerReferral failed"));
 }
@@ -373,22 +401,86 @@ export async function handleInviteCode(bot: MyBot, ctx: BotContext, code: string
       .where(eq(accessTable.userId, userId));
 
     if (existingAccess?.tier === "blocked") {
-      await ctx.reply("🚫 *Access Denied*\n\nYour account has been blocked. Contact the owner if you believe this is a mistake.", { parse_mode: "Markdown" });
+      await ctx.reply("🚫 *Access Denied*\n\nYour account has been blocked.", { parse_mode: "Markdown" });
       return;
     }
 
+    // Owner-generated invite codes — REDEEM (was previously rejecting them)
     const [invite] = await db.select().from(inviteCodesTable).where(eq(inviteCodesTable.code, normalizedCode));
 
     if (invite) {
+      if (!invite.isActive) {
+        await ctx.reply("❌ This invite code is deactivated.");
+        return;
+      }
+      if (invite.expiresAt && invite.expiresAt < new Date()) {
+        await ctx.reply("❌ This invite code has expired.");
+        return;
+      }
+      if ((invite.usedCount ?? 0) >= (invite.maxUses ?? 1)) {
+        await ctx.reply("❌ This invite code has reached its max uses.");
+        return;
+      }
+
+      const tier = ["free", "premium", "vip"].includes(invite.tier) ? invite.tier : "free";
+      const now = new Date();
+      await db.insert(accessTable).values({
+        userId,
+        username: ctx.from!.username,
+        firstName: name,
+        tier,
+        isApproved: true,
+        isPending: false,
+        approvedAt: now,
+        approvedBy: invite.createdBy ?? null,
+        inviteCode: invite.code,
+        requestMessage: `Invite code: ${invite.code}`,
+      }).onConflictDoUpdate({
+        target: accessTable.userId,
+        set: {
+          tier,
+          isApproved: true,
+          isPending: false,
+          approvedAt: now,
+          approvedBy: invite.createdBy ?? null,
+          inviteCode: invite.code,
+          username: ctx.from!.username,
+          firstName: name,
+        },
+      });
+
+      await db
+        .update(inviteCodesTable)
+        .set({ usedCount: (invite.usedCount ?? 0) + 1 })
+        .where(eq(inviteCodesTable.id, invite.id));
+
+      await db.insert(usersTable).values({
+        id: userId,
+        username: ctx.from!.username,
+        firstName: name,
+        lastName: ctx.from!.last_name,
+      }).onConflictDoUpdate({
+        target: usersTable.id,
+        set: { username: ctx.from!.username, firstName: name, lastName: ctx.from!.last_name },
+      }).catch(() => {});
+
+      const emoji = TIER_EMOJI[tier] ?? "🟢";
       await ctx.reply(
-        invite.tier === "free"
-          ? "❌ *Free access requires the username or Telegram ID of an active bot user who invited you.*"
-          : "❌ *Paid tiers cannot be activated with invite codes. Choose a plan and complete payment first.*",
-        { parse_mode: "Markdown" }
+        `✅ *Access granted* ${emoji}\n━━━━━━━━━━━━━━━━━━\n\n` +
+          `Tier: *${TIER_LABEL[tier] ?? tier}*\n` +
+          `Code: \`${invite.code}\`\n\n` +
+          `Open the main menu to continue.`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: new InlineKeyboard()
+            .text("🏠 Main Menu", "menu:main")
+            .text("💳 Upgrade", "access:plans"),
+        },
       );
       return;
     }
 
+    // Referral by @username or Telegram ID
     const inviter = await findRegisteredInviter(code);
     if (!inviter) {
       await ctx.reply(
@@ -490,7 +582,7 @@ export function registerAccessHandlers(bot: MyBot): void {
     await ctx.answerCallbackQuery();
     ctx.session.pendingAction = "access:message";
     await ctx.reply(
-      `💬 *REQUEST ACCESS*\n━━━━━━━━━━━━━━━━━━\n\nSend a short message explaining why you want access:\n\n_e.g. "Referred by @username" or "I'm a regular customer"_`,
+      `💬 *REQUEST ACCESS*\n━━━━━━━━━━━━━━━━━━\n\nSend a short message explaining why you want access:`,
       { parse_mode: "Markdown" }
     );
   });
@@ -498,7 +590,7 @@ export function registerAccessHandlers(bot: MyBot): void {
   bot.callbackQuery("access:invite", async (ctx) => {
     await ctx.answerCallbackQuery();
     ctx.session.pendingAction = "access:code";
-    await ctx.reply(`🎟️ *INVITE / REFERRAL*\n\nSend an owner-issued code, or the @username / Telegram ID of the registered user who invited you:`, { parse_mode: "Markdown" });
+    await ctx.reply(`🎟️ *INVITE / REFERRAL*\n\nSend an owner-issued code, or the @username / Telegram ID of the user who invited you:`, { parse_mode: "Markdown" });
   });
 
   bot.callbackQuery("access:plans", async (ctx) => {
@@ -513,13 +605,13 @@ export function registerAccessHandlers(bot: MyBot): void {
     const hasPaymentMethod = coins.length > 0 || !!process.env["CRYPTOBOT_API_TOKEN"];
     if (!hasPaymentMethod) {
       await ctx.editMessageText(
-        `⚠️ *Payments are not configured yet.*\n\nThe owner must configure a wallet address or CryptoBot before ${TIER_LABEL[tier]} access can be purchased.`,
+        `⚠️ *Payments are not configured yet.*`,
         { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🔙 Plans", "access:plans") }
       );
       return;
     }
     await ctx.editMessageText(
-      `💳 *${TIER_LABEL[tier]} — $${tierMonthlyPrice(tier)} / 30 days*\n━━━━━━━━━━━━━━━━━━\n\nChoose payment method:`,
+      `💳 *${TIER_LABEL[tier]} — $${tierMonthlyPrice(tier)} / 30 days*\n\nChoose payment method:`,
       { parse_mode: "Markdown", reply_markup: subscriptionCoinKeyboard(tier, coins) }
     );
   });
@@ -547,7 +639,7 @@ export function registerAccessHandlers(bot: MyBot): void {
       });
       await db.update(tierSubscriptionsTable).set({ invoiceId: invoice.invoice_id, reference: `SUB-${subscription.id}` }).where(eq(tierSubscriptionsTable.id, subscription.id));
       await ctx.editMessageText(
-        `⚡ *CryptoBot invoice*\n━━━━━━━━━━━━━━━━━━\n\n${TIER_LABEL[tier]} — $${amount}\nAsset: ${asset}\n\nPay here: ${invoice.pay_url}`,
+        `⚡ *CryptoBot invoice*\n\n${TIER_LABEL[tier]} — $${amount}\n${asset}\n\n${invoice.pay_url}`,
         {
           parse_mode: "Markdown",
           reply_markup: new InlineKeyboard()
@@ -559,7 +651,7 @@ export function registerAccessHandlers(bot: MyBot): void {
       );
     } catch (err) {
       logger.error({ err }, "CryptoBot tier invoice failed");
-      await ctx.editMessageText(`❌ Failed to create invoice: ${err instanceof Error ? err.message : "Unknown"}`, {
+      await ctx.editMessageText(`❌ Failed: ${err instanceof Error ? err.message : "Unknown"}`, {
         reply_markup: new InlineKeyboard().text("🔙 Plans", "access:plans"),
       });
     }
@@ -574,10 +666,6 @@ export function registerAccessHandlers(bot: MyBot): void {
     }
     if (subscription.status === "confirmed") {
       await ctx.answerCallbackQuery("Already active");
-      await ctx.editMessageText(`✅ *${TIER_LABEL[subscription.tier] ?? subscription.tier} already active.*`, {
-        parse_mode: "Markdown",
-        reply_markup: new InlineKeyboard().text("🏠 Main Menu", "menu:main"),
-      });
       return;
     }
     const invoiceId = subscription.invoiceId;
@@ -588,15 +676,12 @@ export function registerAccessHandlers(bot: MyBot): void {
     const invoice = await checkCryptoBotInvoice(invoiceId);
     if (!invoice || invoice.status !== "paid") {
       await ctx.answerCallbackQuery("Not paid yet");
-      await ctx.reply(`⏳ Payment status: *${invoice?.status ?? "unknown"}*`, { parse_mode: "Markdown" });
       return;
     }
     const granted = await confirmTierSubscription(subscriptionId, ctx.from!.id, invoiceId);
     await ctx.answerCallbackQuery(granted ? "Activated" : "Already processed");
     await ctx.editMessageText(
-      granted
-        ? `✅ *${TIER_LABEL[subscription.tier] ?? "premium"} access activated for 30 days.*`
-        : "✅ This payment was already processed.",
+      granted ? `✅ *${TIER_LABEL[subscription.tier] ?? "premium"}* active for 30 days.` : "Already processed.",
       { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🏠 Main Menu", "menu:main") },
     );
   });
@@ -606,16 +691,13 @@ export function registerAccessHandlers(bot: MyBot): void {
     const tier = ctx.match[1] as "premium" | "vip";
     const subscription = await createManualSubscription(ctx.from!.id, tier, ctx.match[2]!);
     if (!subscription) {
-      await ctx.editMessageText("❌ No wallet is configured for this payment method.", {
-        reply_markup: new InlineKeyboard().text("🔙 Payment Methods", `access:subscribe:${tier}`),
+      await ctx.editMessageText("❌ No wallet configured.", {
+        reply_markup: new InlineKeyboard().text("🔙", `access:subscribe:${tier}`),
       });
       return;
     }
     await ctx.editMessageText(
-      `💳 *MANUAL PAYMENT — ${TIER_LABEL[tier].toUpperCase()}*\n━━━━━━━━━━━━━━━━━━\n\n` +
-        `Send exactly: *${subscription.amount} ${subscription.coin}*\n` +
-        `Network: *${subscription.coin}*\nTo: \`${subscription.address}\`\nReference: \`${subscription.reference}\`\n\n` +
-        `After sending, tap *I've Paid*. The owner will verify and activate access for 30 days.`,
+      `💳 *MANUAL PAYMENT*\n\nSend *${subscription.amount} ${subscription.coin}* to:\n\`${subscription.address}\`\nRef: \`${subscription.reference}\``,
       {
         parse_mode: "Markdown",
         reply_markup: new InlineKeyboard()
@@ -630,21 +712,20 @@ export function registerAccessHandlers(bot: MyBot): void {
     const subscriptionId = Number(ctx.match[1]);
     const [subscription] = await db.select().from(tierSubscriptionsTable).where(eq(tierSubscriptionsTable.id, subscriptionId));
     if (!subscription || subscription.userId !== ctx.from!.id || subscription.status !== "pending") {
-      await ctx.answerCallbackQuery("This payment is no longer pending.");
+      await ctx.answerCallbackQuery("Not pending");
       return;
     }
     await db.update(tierSubscriptionsTable).set({ status: "claimed", claimedAt: new Date() }).where(eq(tierSubscriptionsTable.id, subscriptionId));
     await ctx.answerCallbackQuery("✅ Sent for verification");
-    await ctx.editMessageText("✅ Payment submitted. The owner will verify it and activate your 30-day access.", {
+    await ctx.editMessageText("✅ Payment submitted for owner verification.", {
       reply_markup: new InlineKeyboard().text("🏠 Main Menu", "menu:main"),
     });
     const ownerId = Number(process.env["BOT_OWNER_ID"] ?? "0");
     if (ownerId) {
       await bot.api.sendMessage(
         ownerId,
-        `💰 *SUBSCRIPTION CLAIM*\n━━━━━━━━━━━━━━━━━━\n\nUser: ${ctx.from!.id}\nTier: ${subscription.tier}\nAmount: ${subscription.amount} ${subscription.coin}\nTo: ${subscription.address}\nRef: ${subscription.reference}`,
+        `💰 *SUBSCRIPTION CLAIM*\nUser: ${ctx.from!.id}\nTier: ${subscription.tier}\n${subscription.amount} ${subscription.coin}\n${subscription.address}\n${subscription.reference}`,
         {
-          parse_mode: "Markdown",
           reply_markup: new InlineKeyboard()
             .text("✅ Confirm", `access:sub:confirm:${subscription.id}`)
             .text("❌ Reject", `access:sub:reject:${subscription.id}`),
@@ -666,9 +747,9 @@ export function registerAccessHandlers(bot: MyBot): void {
     }
     const granted = await confirmTierSubscription(subscriptionId, subscription.userId);
     await ctx.answerCallbackQuery(granted ? "Confirmed" : "Failed");
-    await ctx.editMessageText(granted ? `✅ Activated ${subscription.tier} for user ${subscription.userId}` : "❌ Could not confirm");
+    await ctx.editMessageText(granted ? `✅ Activated ${subscription.tier} for ${subscription.userId}` : "❌ Failed");
     if (granted) {
-      await bot.api.sendMessage(subscription.userId, `✅ Your *${TIER_LABEL[subscription.tier] ?? subscription.tier}* access is active for 30 days.`, {
+      await bot.api.sendMessage(subscription.userId, `✅ Your *${TIER_LABEL[subscription.tier] ?? subscription.tier}* access is active.`, {
         parse_mode: "Markdown",
         reply_markup: new InlineKeyboard().text("🏠 Main Menu", "menu:main"),
       }).catch(() => {});
@@ -683,7 +764,7 @@ export function registerAccessHandlers(bot: MyBot): void {
     const subscriptionId = Number(ctx.match[1]);
     await db.update(tierSubscriptionsTable).set({ status: "cancelled" }).where(eq(tierSubscriptionsTable.id, subscriptionId));
     await ctx.answerCallbackQuery("Rejected");
-    await ctx.editMessageText("❌ Subscription claim rejected.");
+    await ctx.editMessageText("❌ Rejected.");
   });
 
   bot.callbackQuery(/^access:approve:(\d+):(free|premium|vip)$/, async (ctx) => {
@@ -706,7 +787,7 @@ export function registerAccessHandlers(bot: MyBot): void {
       set: { tier, isApproved: true, isPending: false, approvedAt: now, approvedBy: ctx.from.id },
     });
     await ctx.answerCallbackQuery("Approved");
-    await ctx.editMessageText(`✅ Approved user ${userId} as *${TIER_LABEL[tier] ?? tier}*`, { parse_mode: "Markdown" });
+    await ctx.editMessageText(`✅ Approved ${userId} as *${TIER_LABEL[tier] ?? tier}*`, { parse_mode: "Markdown" });
     await bot.api.sendMessage(userId, `✅ Access approved as *${TIER_LABEL[tier] ?? tier}*.`, {
       parse_mode: "Markdown",
       reply_markup: new InlineKeyboard().text("🏠 Main Menu", "menu:main"),
@@ -721,8 +802,8 @@ export function registerAccessHandlers(bot: MyBot): void {
     const userId = Number(ctx.match[1]);
     await db.update(accessTable).set({ isPending: false, isApproved: false }).where(eq(accessTable.userId, userId));
     await ctx.answerCallbackQuery("Denied");
-    await ctx.editMessageText(`🚫 Denied user ${userId}`);
-    await bot.api.sendMessage(userId, "❌ Your access request was denied.").catch(() => {});
+    await ctx.editMessageText(`🚫 Denied ${userId}`);
+    await bot.api.sendMessage(userId, "❌ Access request denied.").catch(() => {});
   });
 
   bot.callbackQuery("hex:access", async (ctx) => {
@@ -736,7 +817,7 @@ export function registerAccessHandlers(bot: MyBot): void {
     const approved = all.filter((a) => a.isApproved);
     const blocked = all.filter((a) => a.tier === "blocked");
     await ctx.editMessageText(
-      `🔐 *ACCESS CONTROL*\n━━━━━━━━━━━━━━━━━━\n\n👥 Total: *${all.length}* · ✅ *${approved.length}* · ⏳ *${pending.length}* · 🚫 *${blocked.length}*`,
+      `🔐 *ACCESS CONTROL*\n\n👥 ${all.length} · ✅ ${approved.length} · ⏳ ${pending.length} · 🚫 ${blocked.length}`,
       { parse_mode: "Markdown", reply_markup: accessPanelKeyboard() },
     );
   });
@@ -753,7 +834,6 @@ export function registerAccessHandlers(bot: MyBot): void {
     else if (filter === "premium") rows = rows.filter((r) => r.tier === "premium" && r.isApproved);
     else if (filter === "vip") rows = rows.filter((r) => r.tier === "vip" && r.isApproved);
     else if (filter === "blocked") rows = rows.filter((r) => r.tier === "blocked");
-    const labels: Record<string, string> = { all: "ALL USERS", pending: "PENDING", premium: "PREMIUM", vip: "VIP", blocked: "BLOCKED" };
     const lines = rows.slice(0, 30).map((r) => {
       const emoji = TIER_EMOJI[r.tier] ?? "•";
       const name = r.firstName ?? r.username ?? String(r.userId);
@@ -761,7 +841,7 @@ export function registerAccessHandlers(bot: MyBot): void {
       return `${emoji} ${status} ${name} (\`${r.userId}\`)`;
     });
     await ctx.editMessageText(
-      `👥 *${labels[filter] ?? filter}* (${rows.length})\n━━━━━━━━━━━━━━━━━━\n\n${lines.length ? lines.join("\n") : "None."}`,
+      `👥 *${filter}* (${rows.length})\n\n${lines.length ? lines.join("\n") : "None."}`,
       { parse_mode: "Markdown", reply_markup: accessPanelKeyboard() },
     );
   });
@@ -773,9 +853,9 @@ export function registerAccessHandlers(bot: MyBot): void {
     }
     await ctx.answerCallbackQuery();
     const codes = await db.select().from(inviteCodesTable).orderBy(desc(inviteCodesTable.createdAt)).limit(20);
-    const lines = codes.map((c) => `${c.isActive ? "✅" : "❌"} \`${c.code}\` ${TIER_EMOJI[c.tier] ?? ""} ${c.tier} (${c.usedCount}/${c.maxUses})`);
+    const lines = codes.map((c) => `${c.isActive ? "✅" : "❌"} \`${c.code}\` ${c.tier} (${c.usedCount}/${c.maxUses})`);
     await ctx.editMessageText(
-      `🎟️ *INVITE CODES*\n━━━━━━━━━━━━━━━━━━\n\n${lines.length ? lines.join("\n") : "No codes yet."}`,
+      `🎟️ *INVITE CODES*\n\n${lines.length ? lines.join("\n") : "No codes yet."}`,
       {
         parse_mode: "Markdown",
         reply_markup: new InlineKeyboard()
@@ -792,7 +872,7 @@ export function registerAccessHandlers(bot: MyBot): void {
     }
     await ctx.answerCallbackQuery();
     ctx.session.pendingAction = "acl:generate_invite";
-    await ctx.reply("Send: `tier maxUses note`\nExample: `premium 5 launch`\nTiers: free · premium · vip", { parse_mode: "Markdown" });
+    await ctx.reply("Send: `tier maxUses note`\nExample: `free 5 launch`\nTiers: free · premium · vip", { parse_mode: "Markdown" });
   });
 }
 
@@ -815,11 +895,7 @@ export async function processAccessInput(bot: MyBot, ctx: BotContext, action: st
         set: { isPending: true, requestMessage: text.slice(0, 300), username: ctx.from!.username, firstName: name },
       });
 
-      await ctx.reply(
-        `✅ *Request Submitted*\n━━━━━━━━━━━━━━━━━━\n\nYour request has been sent to the owner.\n\n_You'll be notified once it's reviewed._`,
-        { parse_mode: "Markdown" }
-      );
-
+      await ctx.reply(`✅ *Request Submitted*\n\nYou'll be notified once reviewed.`, { parse_mode: "Markdown" });
       await notifyOwnerRequest(bot, userId, name, ctx.from!.username, text);
     } catch (err) {
       await ctx.reply(`❌ Failed: ${err instanceof Error ? err.message : "Unknown"}`);
@@ -832,8 +908,7 @@ export async function processAccessInput(bot: MyBot, ctx: BotContext, action: st
     const maxUses = parseInt(parts[1] ?? "1");
     const note = parts.slice(2).join(" ") || undefined;
 
-    const validTiers = ["free", "premium", "vip"];
-    if (!validTiers.includes(tier)) {
+    if (!["free", "premium", "vip"].includes(tier)) {
       await ctx.reply(`❌ Invalid tier. Use: free · premium · vip`);
       return;
     }
@@ -850,7 +925,7 @@ export async function processAccessInput(bot: MyBot, ctx: BotContext, action: st
     });
 
     await ctx.reply(
-      `🎟️ *INVITE CODE CREATED*\n━━━━━━━━━━━━━━━━━━\n\nCode: \`${code}\`\n${TIER_EMOJI[tier] ?? ""} Tier: *${TIER_LABEL[tier] ?? tier}*\nMax uses: *${isNaN(maxUses) ? 1 : maxUses}*${note ? `\nNote: ${note}` : ""}\n\n_Share via: /start ${code}_`,
+      `🎟️ *INVITE CODE CREATED*\n\nCode: \`${code}\`\nTier: *${tier}*\nMax uses: *${isNaN(maxUses) ? 1 : maxUses}*\n\nShare: /start ${code}`,
       { parse_mode: "Markdown", reply_markup: new InlineKeyboard().text("🎟️ Invite Codes", "acl:invites") }
     );
   }
