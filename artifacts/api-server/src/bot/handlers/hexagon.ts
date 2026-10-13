@@ -50,7 +50,14 @@ function releaseUpdate(key: string, success: boolean): void {
   if (success) recentlyHandled.set(key, Date.now());
 }
 
+/** Cache shop snapshot ~60s so chat turns stay fast. */
+let shopContextCache: { at: number; text: string } | null = null;
+const SHOP_CACHE_MS = 60_000;
+
 async function buildShopContext(): Promise<string> {
+  if (shopContextCache && Date.now() - shopContextCache.at < SHOP_CACHE_MS) {
+    return shopContextCache.text;
+  }
   try {
     const [products, orders] = await Promise.all([
       db.select().from(productsTable).where(eq(productsTable.isActive, true)).limit(40),
@@ -80,7 +87,9 @@ async function buildShopContext(): Promise<string> {
                 `• Order #${o.id} | Product:${o.productId} | Qty:${o.quantity} | Status:${o.status}`,
             )
             .join("\n");
-    return `LIVE SHOP DATA:\n${productLines}\n\nRECENT ORDERS:\n${orderLines}`;
+    const text = `LIVE SHOP DATA:\n${productLines}\n\nRECENT ORDERS:\n${orderLines}`;
+    shopContextCache = { at: Date.now(), text };
+    return text;
   } catch (err) {
     logger.warn({ err }, "Crescent could not build shop context");
     return "Shop data unavailable.";
@@ -203,7 +212,8 @@ async function crescentIntroText(userId: number): Promise<string> {
     `• Send a photo to analyse it\n` +
     `• /imagine a cyberpunk market stall\n` +
     `• /briefing — daily secretary briefing\n` +
-    `• Or just type a question`
+    `• Or just type a question\n` +
+    `• /exit — leave chat mode`
   );
 }
 
@@ -253,6 +263,19 @@ async function askHexagon(
 
 export { askHexagon };
 
+/** Keep Crescent conversation open until user leaves (Main Menu / exit). */
+export function enableCrescentChat(ctx: BotContext): void {
+  ctx.session.crescentMode = true;
+  ctx.session.pendingAction = "hexagon:input";
+}
+
+export function disableCrescentChat(ctx: BotContext): void {
+  ctx.session.crescentMode = false;
+  if (ctx.session.pendingAction === "hexagon:input" || ctx.session.pendingAction === "hexagon:imagine") {
+    ctx.session.pendingAction = undefined;
+  }
+}
+
 export async function handleHexagonMessage(
   ctx: BotContext,
   input: string,
@@ -272,10 +295,11 @@ export async function handleHexagonMessage(
     return;
   }
 
-  ctx.session.pendingAction = "hexagon:input";
+  enableCrescentChat(ctx);
   let thinkingId: number | undefined;
   let ok = false;
   try {
+    await ctx.replyWithChatAction(imageUrl ? "upload_photo" : "typing").catch(() => {});
     const thinking = await ctx.reply(
       imageUrl ? "👁️ Reading image..." : "🧠 Crescent thinking...",
     );
@@ -402,7 +426,7 @@ export function registerHexagonHandlers(bot: MyBot): void {
     if (!ctx.from || !(await checkCrescentAccess(ctx))) return;
     const input = ctx.match?.trim();
     if (!input) {
-      ctx.session.pendingAction = "hexagon:input";
+      enableCrescentChat(ctx);
       await ctx.reply(await crescentIntroText(ctx.from.id), {
         reply_markup: crescentMenuKeyboard(),
       });
@@ -415,7 +439,7 @@ export function registerHexagonHandlers(bot: MyBot): void {
     if (!ctx.from || !(await checkCrescentAccess(ctx))) return;
     const input = ctx.match?.trim();
     if (!input) {
-      ctx.session.pendingAction = "hexagon:input";
+      enableCrescentChat(ctx);
       await ctx.reply("Usage: /ai [question]\nOr send a photo with a caption.");
       return;
     }
@@ -438,8 +462,14 @@ export function registerHexagonHandlers(bot: MyBot): void {
     await ctx.reply("🧹 Crescent memory cleared.");
   });
 
+  bot.command("exit", async (ctx) => {
+    disableCrescentChat(ctx);
+    await ctx.reply("👋 Left Crescent chat.\n\nTap 🤖 Crescent AI or /crescent to chat again.");
+  });
+
   bot.on("message:photo", async (ctx, next) => {
     if (!ctx.from || ctx.chat?.type !== "private") return next();
+    if (!ctx.session.crescentMode && ctx.session.pendingAction !== "hexagon:input") return next();
     if (!(await checkCrescentAccess(ctx))) return next();
     const photoKey = `photo:${ctx.chat.id}:${ctx.message.message_id}`;
     if (!claimUpdate(photoKey)) {
@@ -476,7 +506,7 @@ export function registerHexagonCallbacks(bot: MyBot): void {
       return;
     }
     await ctx.answerCallbackQuery();
-    ctx.session.pendingAction = "hexagon:input";
+    enableCrescentChat(ctx);
     await ctx.editMessageText(await crescentIntroText(ctx.from.id), {
       reply_markup: crescentMenuKeyboard(),
     });
@@ -488,8 +518,8 @@ export function registerHexagonCallbacks(bot: MyBot): void {
       return;
     }
     await ctx.answerCallbackQuery();
-    ctx.session.pendingAction = "hexagon:input";
-    await ctx.reply("💬 Chat with Crescent\n\nType a message or send a photo.");
+    enableCrescentChat(ctx);
+    await ctx.reply("💬 Chat with Crescent is ON\n\nJust type — no need for /crescent each time.\nSend /exit or open Main Menu to leave.");
   });
 
   bot.callbackQuery("hexagon:shop", async (ctx) => {
@@ -498,7 +528,7 @@ export function registerHexagonCallbacks(bot: MyBot): void {
       return;
     }
     await ctx.answerCallbackQuery();
-    ctx.session.pendingAction = "hexagon:input";
+    enableCrescentChat(ctx);
     await ctx.reply("🛍️ Shop Q&A\n\nAsk about products, orders, pricing, or stock.");
   });
 
@@ -530,7 +560,7 @@ export function registerHexagonCallbacks(bot: MyBot): void {
     }
     await ctx.answerCallbackQuery();
     await clearMemory(ctx.from.id);
-    ctx.session.pendingAction = "hexagon:input";
+    enableCrescentChat(ctx);
     await ctx.reply("🤖 CRESCENT\n━━━━━━━━━━━━━━━━━━\n\n🧹 Memory cleared.\n\nType a message or send a photo.");
   });
 }
