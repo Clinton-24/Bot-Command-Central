@@ -35,6 +35,11 @@ export function mainMenuKeyboard(userId?: number): InlineKeyboard {
 }
 
 export async function sendMainMenu(ctx: BotContext): Promise<void> {
+  // Leaving any screen for main menu ends Crescent chat mode
+  ctx.session.crescentMode = false;
+  if (ctx.session.pendingAction === "hexagon:input") {
+    ctx.session.pendingAction = undefined;
+  }
   const userId = ctx.from?.id;
 
   if (userId && !isOwner(userId)) {
@@ -163,6 +168,30 @@ export function registerMenuHandlers(bot: MyBot): void {
     const text = ctx.message.text.trim();
     if (text.startsWith("/")) return next();
 
+    const lower = text.toLowerCase();
+    if (
+      ctx.session.crescentMode &&
+      (lower === "exit" || lower === "stop" || lower === "leave" || lower === "quit")
+    ) {
+      const { disableCrescentChat } = await import("./hexagon");
+      disableCrescentChat(ctx);
+      await ctx.reply("👋 Left Crescent chat.\n\nTap 🤖 Crescent AI or /crescent anytime.");
+      return;
+    }
+
+    // Sticky Crescent mode: stay on after Chat button until /exit or Main Menu
+    if (ctx.session.crescentMode || ctx.session.pendingAction === "hexagon:input") {
+      ctx.session.crescentMode = true;
+      ctx.session.pendingAction = "hexagon:input";
+      try {
+        await handleHexagonMessage(ctx, text);
+      } catch (err) {
+        logger.error({ err }, "crescent sticky chat error");
+        await ctx.reply("❌ Something went wrong. Please try again.");
+      }
+      return;
+    }
+
     const pending = ctx.session.pendingAction;
     if (!pending) return next();
 
@@ -183,8 +212,7 @@ export function registerMenuHandlers(bot: MyBot): void {
       } else if (category === "meeting") {
         await processMeetingInput(ctx, detail, text);
       } else if (category === "hexagon") {
-        if (detail === "input") await handleHexagonMessage(ctx, text);
-        else if (detail === "email") await draftEmail(ctx, text);
+        if (detail === "email") await draftEmail(ctx, text);
       } else if (pending.startsWith("hex:")) {
         ctx.session.pendingAction = pending;
         await processHexInput(ctx, pending, text);
@@ -277,7 +305,7 @@ export function registerMenuHandlers(bot: MyBot): void {
       `/schedule · /meetings\n\n` +
       `🤖 *Crescent AI*\n` +
       `/crescent · /ai [question]\n` +
-      `/clearai\n\n` +
+      `/clearai · /exit\n\n` +
       `🩺 *Status*\n` +
       `/health\n\n` +
       `👥 *Group Admin*\n` +
