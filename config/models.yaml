@@ -3,24 +3,22 @@ taskrouting:
     primary: "openai/gpt-4o-mini"
     fallbacks:
       - "google/gemma-4-26b-a4b-it:free"
-      - "nvidia/nemotron-3-ultra-550b-a55b:free"
       - "openai/gpt-4o"
     params:
-      maxtokens: 2000
+      maxtokens: 1500
       temperature: 0.3
   analysis:
     primary: "openai/gpt-4o"
     fallbacks:
-      - "anthropic/claude-sonnet-4.5"
-      - "google/gemma-4-26b-a4b-it:free"
       - "openai/gpt-4o-mini"
+      - "google/gemma-4-26b-a4b-it:free"
     params:
       maxtokens: 4000
       temperature: 0.1
   code:
-    primary: "anthropic/claude-sonnet-4.5"
+    primary: "openai/gpt-4o"
     fallbacks:
-      - "openai/gpt-4o"
+      - "openai/gpt-4o-mini"
       - "google/gemma-4-26b-a4b-it:free"
     params:
       maxtokens: 8000
@@ -29,14 +27,13 @@ taskrouting:
     primary: "openai/gpt-4o"
     fallbacks:
       - "openai/gpt-4o-mini"
-      - "google/gemma-4-26b-a4b-it:free"
     params:
       maxtokens: 2000
       temperature: 0.0
   creative:
     primary: "openai/gpt-4o"
     fallbacks:
-      - "anthropic/claude-sonnet-4.5"
+      - "openai/gpt-4o-mini"
       - "google/gemma-4-26b-a4b-it:free"
     params:
       maxtokens: 4000
@@ -46,8 +43,6 @@ taskrouting:
     fallbacks:
       - "openai/gpt-4o"
       - "google/gemma-4-26b-a4b-it:free"
-      - "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
-      - "anthropic/claude-sonnet-4.5"
     params:
       maxtokens: 2500
       temperature: 0.2
@@ -67,8 +62,8 @@ providers:
     models: ["*"]
 
 defaults:
-  timeoutseconds: 90
-  maxretries: 2
-  retrybackoffbase: 1.5
+  timeoutseconds: 45
+  maxretries: 1
+  retrybackoffbase: 1.0
   embedmodel: "text-embedding-3-small"
   embeddim: 1536

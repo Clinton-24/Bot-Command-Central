@@ -21,6 +21,8 @@ export interface HexDraft {
 
 export interface SessionData {
   pendingAction?: string;
+  /** When true, every plain text/photo in private chat goes to Crescent until /exit or Main Menu */
+  crescentMode?: boolean;
   meetingDraft?: MeetingDraft;
   hexDraft?: HexDraft;
   disputeReply?: string;
