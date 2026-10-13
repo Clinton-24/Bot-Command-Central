@@ -5,17 +5,8 @@ import { registerBatteryWebhook } from "./bot/handlers/battery";
 import { webhookCallback } from "grammy";
 import { runMigrations } from "./lib/migrate";
 import { createCryptoBotRouter } from "./bot/handlers/cryptobot";
-import {
-  exchangeCodeAndSave,
-  verifyOAuthState,
-  isGmailOAuthAppConfigured,
-} from "./lib/gmail";
-import {
-  activateKill,
-  deactivateKill,
-  getKillStatus,
-  isBotKilled,
-} from "./bot/handlers/kill";
+import { getKillStatus } from "./bot/handlers/kill";
+import { isGmailOAuthAppConfigured, exchangeCodeAndSave, parseOAuthState } from "./lib/gmail";
 import { pool } from "@workspace/db";
 
 const rawPort = process.env["PORT"];
@@ -27,7 +18,6 @@ registerBatteryWebhook(app, bot);
 app.post("/bot", webhookCallback(bot, "express"));
 app.use("/api", createCryptoBotRouter(bot));
 
-// Root — keep-alives / monitors often hit /
 app.get("/", (_req, res) => {
   const kill = getKillStatus();
   res.status(200).json({
@@ -39,82 +29,77 @@ app.get("/", (_req, res) => {
 });
 
 app.get("/health", async (_req, res) => {
+  // ALWAYS 200 for UptimeRobot / Render keep-alive.
+  // A brief Neon blip must not mark the service "down".
   const kill = getKillStatus();
   let dbOk = false;
   let dbError: string | undefined;
   try {
-    await pool.query("SELECT 1");
+    await Promise.race([
+      pool.query("SELECT 1"),
+      new Promise((_, reject) => setTimeout(() => reject(new Error("db timeout")), 3_000)),
+    ]);
     dbOk = true;
   } catch (e) {
     dbError = e instanceof Error ? e.message : String(e);
   }
 
-  const body = {
-    status: !dbOk ? "degraded" : kill.killed ? "killed" : "ok",
+  res.status(200).json({
+    status: kill.killed ? "killed" : dbOk ? "ok" : "degraded",
     uptime: process.uptime(),
     kill,
     database: dbOk ? "ok" : "error",
     ...(dbError ? { databaseError: dbError } : {}),
     gmailOAuthConfigured: isGmailOAuthAppConfigured(),
     timestamp: new Date().toISOString(),
-  };
-
-  res.status(dbOk ? 200 : 503).json(body);
+  });
+});
+app.get("/healthz", (_req, res) => {
+  res.status(200).send("ok");
 });
 
-function authorizeKill(req: { headers: Record<string, unknown>; query: Record<string, unknown> }): boolean {
-  const secret = process.env.KILL_SECRET;
-  if (!secret) return false;
-  const header = String(req.headers["x-kill-secret"] ?? "");
-  const q = String(req.query.key ?? "");
-  return header === secret || q === secret;
-}
-
-app.post("/admin/kill", (req, res) => {
-  if (!authorizeKill(req as any)) {
-    res.status(401).json({ error: "unauthorized" });
-    return;
+app.get("/test-ai", async (_req, res) => {
+  const key = process.env.OPENROUTER_API_KEY;
+  if (!key) {
+    return res.json({ ok: false, error: "OPENROUTER_API_KEY not set" });
   }
-  const hard = String((req as any).query?.hard ?? "") === "1";
-  activateKill("http");
-  if (hard) {
-    res.json({ ok: true, mode: "hard", message: "process exiting in 2s" });
-    logger.error("HARD KILL via HTTP — process.exit(1)");
-    setTimeout(() => process.exit(1), 2000);
-    return;
+  const models = [
+    "google/gemma-2-9b-it:free",
+    "meta-llama/llama-3.2-3b-instruct:free",
+    "openai/gpt-4o-mini",
+  ];
+  const results: Record<string, string> = {};
+  for (const model of models) {
+    try {
+      const r = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: "user", content: "Reply with OK" }],
+          max_tokens: 8,
+        }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      const body = await r.json();
+      results[model] = r.ok
+        ? String(body?.choices?.[0]?.message?.content ?? "empty").slice(0, 80)
+        : `${r.status} ${JSON.stringify(body?.error ?? body).slice(0, 120)}`;
+    } catch (e) {
+      results[model] = e instanceof Error ? e.message : String(e);
+    }
   }
-  res.json({ ok: true, mode: "soft", ...getKillStatus() });
-});
-
-app.post("/admin/unkill", (req, res) => {
-  if (!authorizeKill(req as any)) {
-    res.status(401).json({ error: "unauthorized" });
-    return;
-  }
-  deactivateKill();
-  res.json({ ok: true, ...getKillStatus() });
-});
-
-app.get("/admin/kill-status", (req, res) => {
-  if (!authorizeKill(req as any)) {
-    res.status(401).json({ error: "unauthorized" });
-    return;
-  }
-  res.json({ ok: true, ...getKillStatus(), killed: isBotKilled() });
+  res.json({ ok: true, results });
 });
 
 app.get("/oauth/google/callback", async (req, res) => {
   try {
     const code = typeof req.query.code === "string" ? req.query.code : "";
     const state = typeof req.query.state === "string" ? req.query.state : "";
-    const err = typeof req.query.error === "string" ? req.query.error : "";
-
-    if (err) {
-      res.status(400).send(`<h2>Gmail connect cancelled</h2><p>${err}</p><p>You can close this tab and return to Telegram.</p>`);
-      return;
-    }
-
-    const userId = verifyOAuthState(state);
+    const userId = parseOAuthState(state);
     if (!userId || !code) {
       res.status(400).send("<h2>Invalid or expired link</h2><p>Go back to Telegram and run /connect_gmail again.</p>");
       return;
@@ -160,14 +145,14 @@ function startKeepAlive(): void {
     return;
   }
   const pingUrl = `${renderUrl}/health`;
-  logger.info({ pingUrl }, "Keep-alive pinger started (every 4 min)");
+  logger.info({ pingUrl }, "Keep-alive pinger started (every 2 min)");
   setInterval(async () => {
     try {
       await fetch(pingUrl, { signal: AbortSignal.timeout(10_000) });
     } catch {
       // silent
     }
-  }, 4 * 60 * 1000);
+  }, 2 * 60 * 1000);
 }
 
 app.listen(port, async (err?: Error) => {

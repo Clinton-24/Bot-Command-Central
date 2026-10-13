@@ -1,50 +1,49 @@
 taskrouting:
   chat:
-    primary: "openai/gpt-4o-mini"
+    primary: "google/gemma-2-9b-it:free"
     fallbacks:
+      - "meta-llama/llama-3.2-3b-instruct:free"
+      - "openai/gpt-4o-mini"
       - "google/gemma-4-26b-a4b-it:free"
-      - "openai/gpt-4o"
     params:
-      maxtokens: 1500
+      maxtokens: 1200
       temperature: 0.3
   analysis:
-    primary: "openai/gpt-4o"
+    primary: "openai/gpt-4o-mini"
     fallbacks:
-      - "openai/gpt-4o-mini"
-      - "google/gemma-4-26b-a4b-it:free"
+      - "google/gemma-2-9b-it:free"
+      - "meta-llama/llama-3.2-3b-instruct:free"
     params:
-      maxtokens: 4000
+      maxtokens: 2500
       temperature: 0.1
   code:
-    primary: "openai/gpt-4o"
+    primary: "openai/gpt-4o-mini"
     fallbacks:
-      - "openai/gpt-4o-mini"
-      - "google/gemma-4-26b-a4b-it:free"
-    params:
-      maxtokens: 8000
-      temperature: 0.0
-  math:
-    primary: "openai/gpt-4o"
-    fallbacks:
-      - "openai/gpt-4o-mini"
-    params:
-      maxtokens: 2000
-      temperature: 0.0
-  creative:
-    primary: "openai/gpt-4o"
-    fallbacks:
-      - "openai/gpt-4o-mini"
-      - "google/gemma-4-26b-a4b-it:free"
+      - "google/gemma-2-9b-it:free"
     params:
       maxtokens: 4000
+      temperature: 0.0
+  math:
+    primary: "openai/gpt-4o-mini"
+    fallbacks:
+      - "google/gemma-2-9b-it:free"
+    params:
+      maxtokens: 1500
+      temperature: 0.0
+  creative:
+    primary: "openai/gpt-4o-mini"
+    fallbacks:
+      - "google/gemma-2-9b-it:free"
+    params:
+      maxtokens: 2000
       temperature: 0.7
   vision:
     primary: "openai/gpt-4o-mini"
     fallbacks:
       - "openai/gpt-4o"
-      - "google/gemma-4-26b-a4b-it:free"
+      - "google/gemma-2-9b-it:free"
     params:
-      maxtokens: 2500
+      maxtokens: 2000
       temperature: 0.2
 
 providers:
@@ -62,8 +61,8 @@ providers:
     models: ["*"]
 
 defaults:
-  timeoutseconds: 45
+  timeoutseconds: 40
   maxretries: 1
-  retrybackoffbase: 1.0
+  retrybackoffbase: 1.2
   embedmodel: "text-embedding-3-small"
   embeddim: 1536
