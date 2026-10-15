@@ -150,7 +150,7 @@ export function registerWelcomeHandler(bot: MyBot): void {
       }
       await ctx.reply(growthWelcomeText(who, true, false), {
         parse_mode: "Markdown",
-        reply_markup: growthWelcomeKeyboard(),
+        reply_markup: growthWelcomeKeyboard(false),
       });
       return;
     }
@@ -176,7 +176,7 @@ export function registerWelcomeHandler(bot: MyBot): void {
 
     await ctx.reply(growthWelcomeText(who, isNew, owner), {
       parse_mode: "Markdown",
-      reply_markup: growthWelcomeKeyboard(),
+      reply_markup: growthWelcomeKeyboard(owner),
     });
   });
 
@@ -234,7 +234,7 @@ export function registerWelcomeHandler(bot: MyBot): void {
         `Send any message or photo.\n` +
         `• /exit — leave chat mode\n` +
         `• /briefing — daily briefing\n` +
-        `• /invite — earn bonus queries`,
+        (isOwner(ctx.from!.id) ? "" : "• /invite — earn bonus queries"),
       {
         parse_mode: "Markdown",
         reply_markup: new InlineKeyboard()
@@ -312,12 +312,13 @@ export function registerWelcomeHandler(bot: MyBot): void {
   });
 
   bot.command("help", async (ctx) => {
+    const owner = ctx.from ? isOwner(ctx.from.id) : false;
     await ctx.reply(
       `⚡ *CRESCENT — COMMANDS*\n` +
         `━━━━━━━━━━━━━━━━━━\n\n` +
         `🤖 *CRESCENT AI*\n` +
         `/crescent — Chat with Crescent\n` +
-        `/invite — Your referral link (+5 bonus)\n` +
+        (owner ? "" : `/invite — Your referral link (+5 bonus)\n`) +
         `/briefing — Daily briefing\n\n` +
         `🛠️ *GENERAL*\n` +
         `/ping — Latency check\n` +
