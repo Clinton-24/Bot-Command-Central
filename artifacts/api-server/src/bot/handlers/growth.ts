@@ -9,12 +9,16 @@ import { isOwner } from "../helpers";
 import { logger } from "../../lib/logger";
 import { addBonusCredits, REFERRAL_BONUS_CREDITS } from "./crescent-quota";
 
-/** Minimal bot surface for notify (no import from index). */
 type NotifyBot = {
   api: {
     sendMessage: (chatId: number, text: string, other?: object) => Promise<unknown>;
   };
 };
+
+/** Escape Telegram legacy Markdown special chars in user-controlled strings */
+export function escapeMd(s: string): string {
+  return s.replace(/([_*\[`])/g, "\\$1");
+}
 
 export function botUsername(): string {
   return (process.env.BOT_USERNAME ?? "crescent07_bot").replace(/^@/, "");
@@ -161,7 +165,8 @@ export function growthWelcomeText(
   isNew: boolean,
   asOwner = false,
 ): string {
-  const who = displayName.startsWith("@") ? displayName : `*${displayName}*`;
+  // Escape user-controlled names so Telegram Markdown never 400s
+  const who = escapeMd(displayName);
   let body =
     `🌙 *Crescent*\n━━━━━━━━━━━━━━━━━━\n\n` +
     `Hey ${who}\n` +
