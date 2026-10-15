@@ -16,6 +16,11 @@ import {
   referralLink,
 } from "./growth";
 
+function displayName(from: { first_name?: string; username?: string }): string {
+  if (from.username) return `@${from.username}`;
+  return from.first_name ?? "there";
+}
+
 export function registerWelcomeHandler(bot: MyBot): void {
   bot.on("message:new_chat_members", async (ctx) => {
     const chatId = ctx.chat.id;
@@ -121,7 +126,8 @@ export function registerWelcomeHandler(bot: MyBot): void {
     }
 
     const payload = ctx.match?.trim() ?? "";
-    const name = from.first_name ?? "there";
+    const who = displayName(from);
+    const owner = isOwner(from.id);
 
     if (payload.startsWith("tier_subscription_")) {
       await sendMainMenu(ctx);
@@ -129,7 +135,7 @@ export function registerWelcomeHandler(bot: MyBot): void {
     }
 
     const inviterId = parseReferralPayload(payload);
-    if (inviterId && !isOwner(from.id)) {
+    if (inviterId && !owner) {
       const rewarded = await applyReferralReward(
         bot,
         { id: from.id, username: from.username, firstName: from.first_name },
@@ -142,20 +148,20 @@ export function registerWelcomeHandler(bot: MyBot): void {
           firstName: from.first_name,
         });
       }
-      await ctx.reply(growthWelcomeText(name, true), {
+      await ctx.reply(growthWelcomeText(who, true, false), {
         parse_mode: "Markdown",
         reply_markup: growthWelcomeKeyboard(),
       });
       return;
     }
 
-    if (payload.length > 0 && !isOwner(from.id)) {
+    if (payload.length > 0 && !owner) {
       await handleInviteCode(bot, ctx, payload);
       return;
     }
 
     let isNew = false;
-    if (!isOwner(from.id)) {
+    if (!owner) {
       const status = await ensureAutoFreeAccess({
         id: from.id,
         username: from.username,
@@ -168,7 +174,7 @@ export function registerWelcomeHandler(bot: MyBot): void {
       }
     }
 
-    await ctx.reply(growthWelcomeText(name, isNew || isOwner(from.id)), {
+    await ctx.reply(growthWelcomeText(who, isNew, owner), {
       parse_mode: "Markdown",
       reply_markup: growthWelcomeKeyboard(),
     });
@@ -188,7 +194,7 @@ export function registerWelcomeHandler(bot: MyBot): void {
       {
         parse_mode: "Markdown",
         reply_markup: new InlineKeyboard()
-          .url("📤 Share link", `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent("Try this AI secretary bot:")}`)
+          .url("📤 Share link", `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent("Try Crescent — God of Credentials bot")}`)
           .row()
           .text("🏠 Main Menu", "menu:main"),
       },
@@ -206,7 +212,7 @@ export function registerWelcomeHandler(bot: MyBot): void {
       {
         parse_mode: "Markdown",
         reply_markup: new InlineKeyboard()
-          .url("📤 Share", `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent("Try this AI secretary bot:")}`)
+          .url("📤 Share", `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent("Try Crescent — God of Credentials bot")}`)
           .text("🏠 Menu", "menu:main"),
       },
     );
@@ -307,11 +313,8 @@ export function registerWelcomeHandler(bot: MyBot): void {
 
   bot.command("help", async (ctx) => {
     await ctx.reply(
-      `⚡ *FULL COMMAND LIST*\n` +
+      `⚡ *CRESCENT — COMMANDS*\n` +
         `━━━━━━━━━━━━━━━━━━\n\n` +
-        `🛍️ *CARDSHOP*\n` +
-        `/shop — Open the CardShop\n` +
-        `/myorders — View your orders\n\n` +
         `🤖 *CRESCENT AI*\n` +
         `/crescent — Chat with Crescent\n` +
         `/invite — Your referral link (+5 bonus)\n` +
