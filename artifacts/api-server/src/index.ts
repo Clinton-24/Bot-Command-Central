@@ -17,7 +17,6 @@ const port = Number(rawPort);
 const bot = getBotInstance();
 registerBatteryWebhook(app, bot);
 
-// Grammy webhook — never return 500 to Telegram (retries storm); log and ack
 const handleUpdate = webhookCallback(bot, "express");
 app.post("/bot", async (req: Request, res: Response, next: NextFunction) => {
   try {
@@ -185,8 +184,19 @@ app.listen(port, async (err?: Error) => {
     : `http://localhost:${port}/bot`;
 
   try {
-    await bot.api.setWebhook(webhookUrl, { drop_pending_updates: true });
-    logger.info({ url: webhookUrl }, "Telegram webhook set");
+    await bot.api.setWebhook(webhookUrl, {
+      drop_pending_updates: true,
+      allowed_updates: [
+        "message",
+        "edited_message",
+        "callback_query",
+        "inline_query",
+        "chosen_inline_result",
+        "my_chat_member",
+        "chat_member",
+      ],
+    });
+    logger.info({ url: webhookUrl }, "Telegram webhook set (incl. inline_query)");
   } catch (err) {
     logger.error({ err }, "Failed to set Telegram webhook");
   }
