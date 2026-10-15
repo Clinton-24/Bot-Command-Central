@@ -1,5 +1,6 @@
 import { and, eq } from "drizzle-orm";
 import {
+  accessTable,
   crescentQuotaCreditsTable,
   crescentQuotaPurchasesTable,
   db,
@@ -7,8 +8,10 @@ import {
 } from "@workspace/db";
 import { isOwner } from "../helpers";
 
-/** Free / approved users: 10 Crescent queries per Nairobi day. Owner = unlimited. */
+/** Free tier: 10/day. Premium/VIP get more. Owner = unlimited. */
 export const CRESCENT_DAILY_LIMIT = 10;
+export const CRESCENT_PREMIUM_LIMIT = 100;
+export const CRESCENT_VIP_LIMIT = 200;
 export const CRESCENT_TOPUP_CREDITS = 20;
 export const CRESCENT_TOPUP_PRICE = 2;
 export const REFERRAL_BONUS_CREDITS = 5;
@@ -43,53 +46,91 @@ async function isUnlimitedUser(userId: number): Promise<boolean> {
   }
 }
 
+async function dailyLimitFor(userId: number): Promise<number> {
+  try {
+    const [row] = await db.select().from(accessTable).where(eq(accessTable.userId, userId));
+    const tier = (row?.tier ?? "free").toLowerCase();
+    if (tier === "vip") return CRESCENT_VIP_LIMIT;
+    if (tier === "premium") return CRESCENT_PREMIUM_LIMIT;
+  } catch {
+    /* ignore */
+  }
+  return CRESCENT_DAILY_LIMIT;
+}
+
 export async function getCrescentQuotaStatus(userId: number): Promise<QuotaState> {
   if (await isUnlimitedUser(userId)) {
     return { used: 0, limit: Number.POSITIVE_INFINITY, bonus: 0, allowed: true, unlimited: true };
   }
+  const limit = await dailyLimitFor(userId);
   const today = getNairobiDate();
   const [quota] = await db
     .select()
     .from(crescentQuotaCreditsTable)
     .where(eq(crescentQuotaCreditsTable.userId, userId));
+
+  // New calendar day (Nairobi) → daily counter resets; bonus credits keep
   if (!quota || quota.dailyDate !== today) {
-    return { used: 0, limit: CRESCENT_DAILY_LIMIT, bonus: quota?.credits ?? 0, allowed: true, unlimited: false };
+    const bonus = quota?.credits ?? 0;
+    return { used: 0, limit, bonus, allowed: true, unlimited: false };
   }
-  return {
-    used: quota.dailyUsed,
-    limit: CRESCENT_DAILY_LIMIT,
-    bonus: quota.credits,
-    allowed: quota.dailyUsed < CRESCENT_DAILY_LIMIT || quota.credits > 0,
-    unlimited: false,
-  };
+
+  const used = Math.max(0, Number(quota.dailyUsed) || 0);
+  const bonus = Math.max(0, Number(quota.credits) || 0);
+  const allowed = used < limit || bonus > 0;
+  return { used, limit, bonus, allowed, unlimited: false };
 }
 
 export async function consumeCrescentQuota(userId: number): Promise<QuotaState> {
   if (await isUnlimitedUser(userId)) {
     return { used: 0, limit: Number.POSITIVE_INFINITY, bonus: 0, allowed: true, unlimited: true };
   }
+
+  const limit = await dailyLimitFor(userId);
   const today = getNairobiDate();
+
   return db.transaction(async (tx) => {
     const [existing] = await tx
       .select()
       .from(crescentQuotaCreditsTable)
       .where(eq(crescentQuotaCreditsTable.userId, userId));
-    const dailyUsed = existing?.dailyDate === today ? existing.dailyUsed : 0;
-    const credits = existing?.dailyDate === today ? existing.credits : existing?.credits ?? 0;
-    if (dailyUsed >= CRESCENT_DAILY_LIMIT && credits <= 0) {
-      return { used: dailyUsed, limit: CRESCENT_DAILY_LIMIT, bonus: 0, allowed: false, unlimited: false };
+
+    const sameDay = existing?.dailyDate === today;
+    const dailyUsed = sameDay ? Math.max(0, Number(existing.dailyUsed) || 0) : 0;
+    const credits = Math.max(0, Number(existing?.credits) || 0);
+
+    if (dailyUsed >= limit && credits <= 0) {
+      return { used: dailyUsed, limit, bonus: credits, allowed: false, unlimited: false };
     }
-    const nextDailyUsed = dailyUsed < CRESCENT_DAILY_LIMIT ? dailyUsed + 1 : dailyUsed;
-    const nextCredits = dailyUsed < CRESCENT_DAILY_LIMIT ? credits : credits - 1;
-    const values = { userId, credits: nextCredits, dailyDate: today, dailyUsed: nextDailyUsed, updatedAt: new Date() };
+
+    let nextDailyUsed = dailyUsed;
+    let nextCredits = credits;
+    if (dailyUsed < limit) {
+      nextDailyUsed = dailyUsed + 1;
+    } else {
+      nextCredits = credits - 1;
+    }
+
+    const values = {
+      userId,
+      credits: nextCredits,
+      dailyDate: today,
+      dailyUsed: nextDailyUsed,
+      updatedAt: new Date(),
+    };
+
     if (existing) {
-      await tx.update(crescentQuotaCreditsTable).set(values).where(eq(crescentQuotaCreditsTable.userId, userId));
+      await tx
+        .update(crescentQuotaCreditsTable)
+        .set(values)
+        .where(eq(crescentQuotaCreditsTable.userId, userId));
     } else {
       await tx.insert(crescentQuotaCreditsTable).values(values);
     }
+
     return {
       used: nextDailyUsed,
-      limit: CRESCENT_DAILY_LIMIT,
+      limit,
       bonus: nextCredits,
       allowed: true,
       unlimited: false,
@@ -97,16 +138,63 @@ export async function consumeCrescentQuota(userId: number): Promise<QuotaState> 
   });
 }
 
+/** Undo one consume (e.g. AI failed / inline timed out). */
+export async function refundCrescentQuota(userId: number): Promise<void> {
+  if (await isUnlimitedUser(userId)) return;
+  const today = getNairobiDate();
+  try {
+    await db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select()
+        .from(crescentQuotaCreditsTable)
+        .where(eq(crescentQuotaCreditsTable.userId, userId));
+      if (!existing || existing.dailyDate !== today) return;
+      const used = Math.max(0, (Number(existing.dailyUsed) || 0) - 1);
+      await tx
+        .update(crescentQuotaCreditsTable)
+        .set({ dailyUsed: used, updatedAt: new Date() })
+        .where(eq(crescentQuotaCreditsTable.userId, userId));
+    });
+  } catch {
+    /* ignore refund errors */
+  }
+}
+
+/** Owner tool: reset a user's daily counter to 0 (keeps bonus). */
+export async function resetDailyQuota(userId: number): Promise<void> {
+  const today = getNairobiDate();
+  const [existing] = await db
+    .select()
+    .from(crescentQuotaCreditsTable)
+    .where(eq(crescentQuotaCreditsTable.userId, userId));
+  if (existing) {
+    await db
+      .update(crescentQuotaCreditsTable)
+      .set({ dailyUsed: 0, dailyDate: today, updatedAt: new Date() })
+      .where(eq(crescentQuotaCreditsTable.userId, userId));
+  } else {
+    await db.insert(crescentQuotaCreditsTable).values({
+      userId,
+      credits: 0,
+      dailyDate: today,
+      dailyUsed: 0,
+    });
+  }
+}
+
 export function formatCrescentQuota(quota: QuotaState): string {
   if (quota.unlimited) return "Unlimited";
-  if (quota.used < quota.limit) return `${quota.used}/${quota.limit} daily · ${quota.bonus} bonus`;
-  return `${quota.bonus} bonus queries remaining`;
+  if (quota.used < quota.limit) {
+    return `${quota.used}/${quota.limit} daily` + (quota.bonus > 0 ? ` · ${quota.bonus} bonus` : "");
+  }
+  if (quota.bonus > 0) return `${quota.bonus} bonus queries remaining`;
+  return `0/${quota.limit} daily used up`;
 }
 
 export async function createCrescentQuotaPurchase(userId: number, asset: string) {
   const [purchase] = await db
     .insert(crescentQuotaPurchasesTable)
-    .values({ userId, asset, credits: CRESCENT_TOPUP_CREDITS, amount: CRESCENT_TOPUP_PRICE.toFixed(2) })
+    .values({ userId, credits: CRESCENT_TOPUP_CREDITS, amount: CRESCENT_TOPUP_PRICE.toFixed(2), asset })
     .returning();
   return purchase;
 }
@@ -149,7 +237,6 @@ export async function confirmCrescentQuotaPurchase(
   });
 }
 
-/** Grant bonus Crescent queries (referral rewards, promos). */
 export async function addBonusCredits(userId: number, amount: number): Promise<number> {
   if (!Number.isFinite(amount) || amount <= 0) return 0;
   const today = getNairobiDate();

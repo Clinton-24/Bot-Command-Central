@@ -1,5 +1,5 @@
 /**
- * Crescent inline — ALWAYS answer within ~2s or Telegram spins forever.
+ * Crescent inline — ALWAYS answer quickly; only burn quota on success.
  */
 import type { Bot } from "grammy";
 import type { InlineQueryResultArticle } from "grammy/types";
@@ -9,10 +9,15 @@ import type { BotContext } from "../context";
 import { isOwner } from "../helpers";
 import { logger } from "../../lib/logger";
 import { routeChat } from "../../lib/model-router";
-import { consumeCrescentQuota, formatCrescentQuota } from "./crescent-quota";
+import {
+  consumeCrescentQuota,
+  formatCrescentQuota,
+  getCrescentQuotaStatus,
+  refundCrescentQuota,
+} from "./crescent-quota";
 import { botUsername } from "./growth";
 
-const AI_MS = 2_000;
+const AI_MS = 2_500;
 
 function article(
   id: string,
@@ -68,7 +73,6 @@ export function registerInlineCrescent(bot: Bot<BotContext>): void {
     const userId = ctx.from?.id;
     const q = (ctx.inlineQuery.query ?? "").trim();
 
-    // Safety: always end with answerInlineQuery
     const answer = async (results: InlineQueryResultArticle[], extra?: object) => {
       try {
         await ctx.answerInlineQuery(results, {
@@ -118,14 +122,15 @@ export function registerInlineCrescent(bot: Bot<BotContext>): void {
         return;
       }
 
-      const consumed = await consumeCrescentQuota(userId).catch(() => ({ allowed: true } as any));
-      if (consumed && consumed.allowed === false) {
+      // Check only — do NOT consume until AI succeeds
+      const status = await getCrescentQuotaStatus(userId);
+      if (!status.allowed) {
         await answer([
           article(
             "quota",
             "Quota exceeded",
-            formatCrescentQuota(consumed),
-            `Quota exceeded. Open @${botUsername()} or wait for reset.`,
+            formatCrescentQuota(status),
+            `Daily Crescent limit reached (${formatCrescentQuota(status)}).\nResets at midnight Nairobi.\n\nOr open @${botUsername()} to top up / upgrade.`,
           ),
         ]);
         return;
@@ -134,6 +139,8 @@ export function registerInlineCrescent(bot: Bot<BotContext>): void {
       const reply = await aiOrTimeout(q);
 
       if (reply) {
+        // Successful answer → count 1 query
+        await consumeCrescentQuota(userId).catch(() => {});
         await answer([
           article(
             `a${Date.now()}`,
@@ -146,14 +153,14 @@ export function registerInlineCrescent(bot: Bot<BotContext>): void {
         return;
       }
 
-      // AI too slow — still return something so the spinner stops
+      // Failed / timeout — do NOT consume quota
       await answer(
         [
           article(
             `slow${Date.now()}`,
             "Open Crescent for full answer",
-            "AI is slow — tap to chat with the bot",
-            `Crescent is taking longer than usual.\n\nYour question:\n${q}\n\n→ Open @${botUsername()} and send it there for a full reply.`,
+            "No quota used — AI was slow",
+            `Crescent is slow right now (no quota used).\n\nYour question:\n${q}\n\n→ Open @${botUsername()} and send it there.`,
           ),
         ],
         { switch_pm_text: "Ask Crescent now", switch_pm_parameter: "inline_slow" },
