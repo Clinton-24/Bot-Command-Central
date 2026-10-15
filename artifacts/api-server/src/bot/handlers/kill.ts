@@ -1,18 +1,10 @@
 /**
  * Instant kill switch — owner only.
- *
- * Soft kill  (/kill)     — bot ignores all non-owner updates immediately
- * Revive     (/unkill)   — restore normal operation
- * Hard kill  (/killhard) — process.exit after confirmation (Render may auto-restart)
- * Status     (/killstatus)
- *
- * HTTP: POST /admin/kill  header X-Kill-Secret: <KILL_SECRET>
- *       POST /admin/unkill
- *       GET  /admin/kill-status
  */
 
 import { InlineKeyboard } from "grammy";
-import type { MyBot } from "../index";
+import type { Bot } from "grammy";
+import type { BotContext } from "../context";
 import { isOwner } from "../helpers";
 import { logger } from "../../lib/logger";
 
@@ -58,9 +50,24 @@ export function killSwitchMiddleware() {
     const uid = ctx.from?.id;
     if (uid && isOwner(uid)) return next();
 
-    // Silently drop or short reply — avoid spam loops
+    // MUST answer inline/callback or Telegram spins forever
     try {
-      if (ctx.callbackQuery) {
+      if (ctx.inlineQuery) {
+        await ctx.answerInlineQuery(
+          [
+            {
+              type: "article",
+              id: "killed",
+              title: "Bot offline",
+              description: "Kill switch is on",
+              input_message_content: {
+                message_text: "Crescent is offline (kill switch). Contact the owner.",
+              },
+            },
+          ],
+          { cache_time: 5, is_personal: true },
+        );
+      } else if (ctx.callbackQuery) {
         await ctx.answerCallbackQuery({ text: "Bot offline (kill switch)", show_alert: true });
       } else if (ctx.message) {
         await ctx.reply("⛔ Bot is offline (emergency stop). Contact the owner.");
@@ -71,7 +78,7 @@ export function killSwitchMiddleware() {
   };
 }
 
-export function registerKillHandlers(bot: MyBot): void {
+export function registerKillHandlers(bot: Bot<BotContext>): void {
   bot.command("kill", async (ctx) => {
     if (!ctx.from || !isOwner(ctx.from.id)) {
       await ctx.reply("⛔ Owner only.");
