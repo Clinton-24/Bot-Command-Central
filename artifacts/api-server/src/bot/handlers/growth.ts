@@ -3,14 +3,20 @@
  * - Auto free tier on first /start
  * - Deep-link referrals: t.me/bot?start=ref_<telegramId>
  * - Two-sided rewards (invitee free access, inviter bonus Crescent credits)
+ *
+ * NOTE: Do NOT import from ../index (circular with welcome → index).
  */
 import { InlineKeyboard } from "grammy";
+import type { Api, Bot } from "grammy";
 import { eq } from "drizzle-orm";
 import { db, accessTable } from "@workspace/db";
-import type { MyBot } from "../index";
+import type { BotContext } from "../context";
 import { isOwner } from "../helpers";
 import { logger } from "../../lib/logger";
 import { addBonusCredits, REFERRAL_BONUS_CREDITS } from "./crescent-quota";
+
+/** Minimal bot surface used by referral notify (avoids importing MyBot from index). */
+type NotifyBot = { api: Api };
 
 export function botUsername(): string {
   return (process.env.BOT_USERNAME ?? "crescent07_bot").replace(/^@/, "");
@@ -44,92 +50,106 @@ export async function ensureAutoFreeAccess(user: {
 }): Promise<"created" | "already" | "blocked" | "skipped"> {
   if (isOwner(user.id)) return "skipped";
 
-  const [existing] = await db.select().from(accessTable).where(eq(accessTable.userId, user.id));
-  if (existing?.tier === "blocked") return "blocked";
-  if (existing?.isApproved) return "already";
+  try {
+    const [existing] = await db.select().from(accessTable).where(eq(accessTable.userId, user.id));
+    if (existing?.tier === "blocked") return "blocked";
+    if (existing?.isApproved) return "already";
 
-  const now = new Date();
-  await db
-    .insert(accessTable)
-    .values({
-      userId: user.id,
-      username: user.username ?? null,
-      firstName: user.firstName ?? null,
-      tier: "free",
-      isApproved: true,
-      isPending: false,
-      approvedAt: now,
-      requestMessage: "auto-free-onboarding",
-    })
-    .onConflictDoUpdate({
-      target: accessTable.userId,
-      set: {
+    const now = new Date();
+    await db
+      .insert(accessTable)
+      .values({
+        userId: user.id,
+        username: user.username ?? null,
+        firstName: user.firstName ?? null,
         tier: "free",
         isApproved: true,
         isPending: false,
         approvedAt: now,
-        username: user.username ?? null,
-        firstName: user.firstName ?? null,
-      },
-    });
+        requestMessage: "auto-free-onboarding",
+      })
+      .onConflictDoUpdate({
+        target: accessTable.userId,
+        set: {
+          tier: "free",
+          isApproved: true,
+          isPending: false,
+          approvedAt: now,
+          username: user.username ?? null,
+          firstName: user.firstName ?? null,
+        },
+      });
 
-  return "created";
+    return "created";
+  } catch (err) {
+    logger.error({ err, userId: user.id }, "ensureAutoFreeAccess failed");
+    // Don't block the bot if DB hiccups
+    return "already";
+  }
 }
 
 /** Apply referral: approve invitee (free) + bonus credits to inviter */
 export async function applyReferralReward(
-  bot: MyBot,
+  bot: NotifyBot,
   invitee: { id: number; username?: string | null; firstName?: string | null },
   inviterId: number,
 ): Promise<boolean> {
   if (!inviterId || inviterId === invitee.id) return false;
   if (isOwner(invitee.id)) return false;
 
-  const [inviterAccess] = await db.select().from(accessTable).where(eq(accessTable.userId, inviterId));
-  const inviterOk =
-    isOwner(inviterId) ||
-    (!!inviterAccess?.isApproved && inviterAccess.tier !== "blocked");
-  if (!inviterOk) return false;
-
-  await ensureAutoFreeAccess(invitee);
-
-  await db
-    .update(accessTable)
-    .set({
-      invitedBy: inviterId,
-      requestMessage: `Referral deep-link from ${inviterId}`,
-      approvedBy: inviterId,
-    })
-    .where(eq(accessTable.userId, invitee.id))
-    .catch(() => {});
-
   try {
-    const newBal = await addBonusCredits(inviterId, REFERRAL_BONUS_CREDITS);
-    const name = invitee.firstName ?? invitee.username ?? String(invitee.id);
-    await bot.api
-      .sendMessage(
-        inviterId,
-        `🎁 Referral reward!\n━━━━━━━━━━━━━━━━━━\n\n` +
-          `${name} joined with your link.\n` +
-          `+${REFERRAL_BONUS_CREDITS} Crescent bonus queries (balance: ${newBal}).\n\n` +
-          `Keep sharing:\n${referralLink(inviterId)}`,
-      )
-      .catch(() => {});
+    const [inviterAccess] = await db.select().from(accessTable).where(eq(accessTable.userId, inviterId));
+    const inviterOk =
+      isOwner(inviterId) ||
+      (!!inviterAccess?.isApproved && inviterAccess.tier !== "blocked");
+    if (!inviterOk) return false;
+
+    await ensureAutoFreeAccess(invitee);
+
+    try {
+      await db
+        .update(accessTable)
+        .set({
+          invitedBy: inviterId,
+          requestMessage: `Referral deep-link from ${inviterId}`,
+          approvedBy: inviterId,
+        })
+        .where(eq(accessTable.userId, invitee.id));
+    } catch (err) {
+      logger.warn({ err }, "referral metadata update failed");
+    }
+
+    try {
+      const newBal = await addBonusCredits(inviterId, REFERRAL_BONUS_CREDITS);
+      const name = invitee.firstName ?? invitee.username ?? String(invitee.id);
+      await bot.api
+        .sendMessage(
+          inviterId,
+          `🎁 Referral reward!\n━━━━━━━━━━━━━━━━━━\n\n` +
+            `${name} joined with your link.\n` +
+            `+${REFERRAL_BONUS_CREDITS} Crescent bonus queries (balance: ${newBal}).\n\n` +
+            `Keep sharing:\n${referralLink(inviterId)}`,
+        )
+        .catch(() => {});
+    } catch (err) {
+      logger.warn({ err, inviterId }, "referral bonus failed");
+    }
+
+    const ownerId = Number(process.env.BOT_OWNER_ID ?? "0");
+    if (ownerId) {
+      await bot.api
+        .sendMessage(
+          ownerId,
+          `🤝 New referral\nInvitee: ${invitee.id}\nInviter: ${inviterId}`,
+        )
+        .catch(() => {});
+    }
+
+    return true;
   } catch (err) {
-    logger.warn({ err, inviterId }, "referral bonus failed");
+    logger.error({ err, inviterId, inviteeId: invitee.id }, "applyReferralReward failed");
+    return false;
   }
-
-  const ownerId = Number(process.env.BOT_OWNER_ID ?? "0");
-  if (ownerId) {
-    await bot.api
-      .sendMessage(
-        ownerId,
-        `🤝 New referral\nInvitee: ${invitee.id}\nInviter: ${inviterId}`,
-      )
-      .catch(() => {});
-  }
-
-  return true;
 }
 
 /** Welcome buttons — owner only gets Crescent + Main Menu */
