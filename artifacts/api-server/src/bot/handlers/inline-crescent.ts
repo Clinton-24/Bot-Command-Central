@@ -2,11 +2,13 @@
  * Crescent inline mode
  * Anyone in any chat types: @YourBot <question>
  * Both participants can do this — Telegram sends inline_query per user.
+ * NOTE: Do not import from ../index (circular).
  */
+import type { Bot } from "grammy";
 import type { InlineQueryResultArticle } from "grammy/types";
 import { eq } from "drizzle-orm";
 import { accessTable, db } from "@workspace/db";
-import type { MyBot } from "../index";
+import type { BotContext } from "../context";
 import { isOwner } from "../helpers";
 import { logger } from "../../lib/logger";
 import { routeChat } from "../../lib/model-router";
@@ -27,7 +29,7 @@ async function canUseInline(userId: number): Promise<{ ok: boolean; reason?: str
     return { ok: true };
   } catch (err) {
     logger.warn({ err, userId }, "inline access check failed");
-    return { ok: true }; // fail open so inline still works if DB blips
+    return { ok: true };
   }
 }
 
@@ -48,7 +50,7 @@ function article(
   };
 }
 
-export function registerInlineCrescent(bot: MyBot): void {
+export function registerInlineCrescent(bot: Bot<BotContext>): void {
   bot.on("inline_query", async (ctx) => {
     const userId = ctx.from?.id;
     const q = (ctx.inlineQuery.query ?? "").trim();
@@ -68,7 +70,7 @@ export function registerInlineCrescent(bot: MyBot): void {
               "no-access",
               "Crescent — access required",
               access.reason ?? "Start the bot first",
-              `🌙 Crescent\n\n${access.reason ?? "Open the bot and /start for free access."}\n\nt.me/${botUsername()}`,
+              `Crescent\n\n${access.reason ?? "Open the bot and /start for free access."}\n\nt.me/${botUsername()}`,
             ),
           ],
           {
@@ -88,7 +90,7 @@ export function registerInlineCrescent(bot: MyBot): void {
               "hint",
               "Ask Crescent anything",
               "Type your question after @bot…",
-              `🌙 Crescent\n\nType a question after @${botUsername()} in any chat.\nExample: @${botUsername()} summarize this idea…\n\nBoth people in the chat can do this.`,
+              `Crescent\n\nType a question after @${botUsername()} in any chat.\nExample: @${botUsername()} summarize this idea…\n\nBoth people in the chat can do this.`,
             ),
           ],
           {
@@ -101,7 +103,6 @@ export function registerInlineCrescent(bot: MyBot): void {
         return;
       }
 
-      // Quota (owner unlimited)
       const consumed = await consumeCrescentQuota(userId);
       if (!consumed.allowed) {
         await ctx.answerInlineQuery(
@@ -110,7 +111,7 @@ export function registerInlineCrescent(bot: MyBot): void {
               "quota",
               "Quota exceeded",
               formatCrescentQuota(consumed),
-              `⚠️ Crescent quota exceeded\n${formatCrescentQuota(consumed)}\n\nResets midnight Nairobi · or upgrade in @${botUsername()}`,
+              `Crescent quota exceeded\n${formatCrescentQuota(consumed)}\n\nResets midnight Nairobi · or upgrade in @${botUsername()}`,
             ),
           ],
           { cache_time: 5, is_personal: true },
@@ -118,7 +119,6 @@ export function registerInlineCrescent(bot: MyBot): void {
         return;
       }
 
-      // Fast, short answer for inline UX
       const response = await routeChat("chat", [
         {
           role: "system",
@@ -128,10 +128,10 @@ export function registerInlineCrescent(bot: MyBot): void {
         { role: "user", content: q },
       ]);
 
-      const reply = (response.reply || "…").trim();
+      const reply = (response.reply || "...").trim();
       const body =
-        `🌙 Crescent\n━━━━━━━━━━━━━━━━━━\n\n` +
-        `Q: ${q.slice(0, 200)}${q.length > 200 ? "…" : ""}\n\n` +
+        `Crescent\n————————\n\n` +
+        `Q: ${q.slice(0, 200)}${q.length > 200 ? "..." : ""}\n\n` +
         `${reply}\n\n` +
         `— via @${botUsername()}`;
 
@@ -140,23 +140,10 @@ export function registerInlineCrescent(bot: MyBot): void {
 
       await ctx.answerInlineQuery(
         [
-          article(
-            `ans-${Date.now()}`,
-            "Crescent answer",
-            reply.slice(0, 100),
-            body,
-          ),
-          article(
-            `raw-${Date.now()}`,
-            "Answer only (no header)",
-            quotaHint,
-            reply.slice(0, 4096),
-          ),
+          article(`ans-${Date.now()}`, "Crescent answer", reply.slice(0, 100), body),
+          article(`raw-${Date.now()}`, "Answer only (no header)", quotaHint, reply.slice(0, 4096)),
         ],
-        {
-          cache_time: 2,
-          is_personal: true,
-        },
+        { cache_time: 2, is_personal: true },
       );
     } catch (err) {
       logger.error({ err, userId, qid, q: q.slice(0, 80) }, "inline_query failed");
@@ -167,7 +154,7 @@ export function registerInlineCrescent(bot: MyBot): void {
               "err",
               "Crescent error",
               "Try again or open the bot",
-              `❌ Crescent could not answer right now.\n\nOpen @${botUsername()} and try /crescent.`,
+              `Crescent could not answer right now.\n\nOpen @${botUsername()} and try /crescent.`,
             ),
           ],
           { cache_time: 1, is_personal: true },
@@ -178,7 +165,6 @@ export function registerInlineCrescent(bot: MyBot): void {
     }
   });
 
-  // Optional: log when someone picks a result (no chat id for privacy)
   bot.on("chosen_inline_result", async (ctx) => {
     logger.info(
       {
