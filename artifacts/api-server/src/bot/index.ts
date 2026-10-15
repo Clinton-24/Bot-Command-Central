@@ -11,6 +11,7 @@ import { registerWelcomeHandler } from "./handlers/welcome";
 import { registerAntiSpamHandler } from "./handlers/antispam";
 import { registerMeetingHandlers, registerMeetingCallbacks } from "./handlers/meetings";
 import { registerHexagonHandlers, registerHexagonCallbacks } from "./handlers/hexagon";
+import { registerInlineCrescent } from "./handlers/inline-crescent";
 import { registerReminderHandlers, startDailyDigestScheduler, startTwoHourPingScheduler } from "./handlers/reminders";
 import { registerBatteryHandlers } from "./handlers/battery";
 import { registerEmailHandlers, registerEmailCallbacks } from "./handlers/email";
@@ -74,15 +75,12 @@ export function createBot(): MyBot {
     }),
   );
 
-  // Kill switch MUST be first after session — blocks all non-owner traffic instantly
   bot.use(killSwitchMiddleware());
   bot.use(autoAnswerCallbacks());
-  // Owner gets pinged when users become active (debounced)
   bot.use(activityAlertMiddleware(bot));
   registerKillHandlers(bot);
   registerActivityCommands(bot);
 
-  // Telegram /health — not the HTTP route
   bot.command("health", async (ctx) => {
     const kill = getKillStatus();
     let dbOk = false;
@@ -103,42 +101,35 @@ export function createBot(): MyBot {
     );
   });
 
-  // Core
   registerMenuHandlers(bot);
   registerAntiSpamHandler(bot);
   registerWelcomeHandler(bot);
 
-  // Shop & payments
   registerCardShopHandlers(bot);
   registerCardShopCallbacks(bot);
   registerShopHandlers(bot);
   registerShopCallbacks(bot);
 
-  // Card tools
   registerCardHandlers(bot);
   registerCardCallbacks(bot);
 
-  // Social tools
   registerSocialHandlers(bot);
   registerSocialCallbacks(bot);
 
-  // Group moderation
   registerAdminHandlers(bot);
   registerAdminCallbacks(bot);
 
-  // Meetings
   registerMeetingHandlers(bot);
   registerMeetingCallbacks(bot);
 
-  // Hexagon AI
   registerHexagonHandlers(bot);
   registerHexagonCallbacks(bot);
+  registerInlineCrescent(bot);
   registerReminderHandlers(bot);
   registerBatteryHandlers(bot);
   registerEmailHandlers(bot);
   registerEmailCallbacks(bot);
 
-  // Owner panel
   registerHexHandlers(bot);
   registerHexCallbacks(bot);
   registerAccessHandlers(bot);
