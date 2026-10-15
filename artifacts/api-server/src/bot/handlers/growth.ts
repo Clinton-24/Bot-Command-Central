@@ -132,7 +132,14 @@ export async function applyReferralReward(
   return true;
 }
 
-export function growthWelcomeKeyboard(): InlineKeyboard {
+/** Welcome buttons — owner only gets Crescent + Main Menu */
+export function growthWelcomeKeyboard(asOwner = false): InlineKeyboard {
+  if (asOwner) {
+    return new InlineKeyboard()
+      .text("🤖 Try Crescent", "growth:try_crescent")
+      .row()
+      .text("🏠 Main Menu", "menu:main");
+  }
   return new InlineKeyboard()
     .text("🤖 Try Crescent", "growth:try_crescent")
     .row()
