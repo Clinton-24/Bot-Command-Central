@@ -11,6 +11,7 @@ import { isOwner } from "../helpers";
 export const CRESCENT_DAILY_LIMIT = 10;
 export const CRESCENT_TOPUP_CREDITS = 20;
 export const CRESCENT_TOPUP_PRICE = 2;
+export const REFERRAL_BONUS_CREDITS = 5;
 
 type QuotaState = {
   used: number;
@@ -31,7 +32,6 @@ function getNairobiDate(): string {
 
 async function isUnlimitedUser(userId: number): Promise<boolean> {
   if (isOwner(userId)) return true;
-
   try {
     const [user] = await db
       .select({ isOwner: usersTable.isOwner })
@@ -47,17 +47,14 @@ export async function getCrescentQuotaStatus(userId: number): Promise<QuotaState
   if (await isUnlimitedUser(userId)) {
     return { used: 0, limit: Number.POSITIVE_INFINITY, bonus: 0, allowed: true, unlimited: true };
   }
-
   const today = getNairobiDate();
   const [quota] = await db
     .select()
     .from(crescentQuotaCreditsTable)
     .where(eq(crescentQuotaCreditsTable.userId, userId));
-
   if (!quota || quota.dailyDate !== today) {
     return { used: 0, limit: CRESCENT_DAILY_LIMIT, bonus: quota?.credits ?? 0, allowed: true, unlimited: false };
   }
-
   return {
     used: quota.dailyUsed,
     limit: CRESCENT_DAILY_LIMIT,
@@ -71,30 +68,25 @@ export async function consumeCrescentQuota(userId: number): Promise<QuotaState> 
   if (await isUnlimitedUser(userId)) {
     return { used: 0, limit: Number.POSITIVE_INFINITY, bonus: 0, allowed: true, unlimited: true };
   }
-
   const today = getNairobiDate();
   return db.transaction(async (tx) => {
     const [existing] = await tx
       .select()
       .from(crescentQuotaCreditsTable)
       .where(eq(crescentQuotaCreditsTable.userId, userId));
-
     const dailyUsed = existing?.dailyDate === today ? existing.dailyUsed : 0;
     const credits = existing?.dailyDate === today ? existing.credits : existing?.credits ?? 0;
     if (dailyUsed >= CRESCENT_DAILY_LIMIT && credits <= 0) {
       return { used: dailyUsed, limit: CRESCENT_DAILY_LIMIT, bonus: 0, allowed: false, unlimited: false };
     }
-
     const nextDailyUsed = dailyUsed < CRESCENT_DAILY_LIMIT ? dailyUsed + 1 : dailyUsed;
     const nextCredits = dailyUsed < CRESCENT_DAILY_LIMIT ? credits : credits - 1;
     const values = { userId, credits: nextCredits, dailyDate: today, dailyUsed: nextDailyUsed, updatedAt: new Date() };
-
     if (existing) {
       await tx.update(crescentQuotaCreditsTable).set(values).where(eq(crescentQuotaCreditsTable.userId, userId));
     } else {
       await tx.insert(crescentQuotaCreditsTable).values(values);
     }
-
     return {
       used: nextDailyUsed,
       limit: CRESCENT_DAILY_LIMIT,
@@ -136,19 +128,15 @@ export async function confirmCrescentQuotaPurchase(
       .select()
       .from(crescentQuotaPurchasesTable)
       .where(and(eq(crescentQuotaPurchasesTable.id, purchaseId), eq(crescentQuotaPurchasesTable.userId, userId)));
-
     if (!purchase || purchase.status === "confirmed") return false;
-
     await tx
       .update(crescentQuotaPurchasesTable)
       .set({ status: "confirmed", invoiceId, confirmedAt: new Date() })
       .where(eq(crescentQuotaPurchasesTable.id, purchaseId));
-
     const [quota] = await tx
       .select()
       .from(crescentQuotaCreditsTable)
       .where(eq(crescentQuotaCreditsTable.userId, userId));
-
     if (quota) {
       await tx
         .update(crescentQuotaCreditsTable)
@@ -157,7 +145,35 @@ export async function confirmCrescentQuotaPurchase(
     } else {
       await tx.insert(crescentQuotaCreditsTable).values({ userId, credits: purchase.credits });
     }
-
     return true;
+  });
+}
+
+/** Grant bonus Crescent queries (referral rewards, promos). */
+export async function addBonusCredits(userId: number, amount: number): Promise<number> {
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  const today = getNairobiDate();
+  return db.transaction(async (tx) => {
+    const [existing] = await tx
+      .select()
+      .from(crescentQuotaCreditsTable)
+      .where(eq(crescentQuotaCreditsTable.userId, userId));
+    const credits = (existing?.credits ?? 0) + Math.floor(amount);
+    const dailyUsed = existing?.dailyDate === today ? existing.dailyUsed : 0;
+    if (existing) {
+      await tx
+        .update(crescentQuotaCreditsTable)
+        .set({ credits, dailyDate: today, dailyUsed, updatedAt: new Date() })
+        .where(eq(crescentQuotaCreditsTable.userId, userId));
+    } else {
+      await tx.insert(crescentQuotaCreditsTable).values({
+        userId,
+        credits,
+        dailyDate: today,
+        dailyUsed: 0,
+        updatedAt: new Date(),
+      });
+    }
+    return credits;
   });
 }
