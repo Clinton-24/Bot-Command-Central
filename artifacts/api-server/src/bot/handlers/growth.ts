@@ -134,7 +134,7 @@ export async function applyReferralReward(
 
 export function growthWelcomeKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
-    .text("🤖 Try Crescent AI", "growth:try_crescent")
+    .text("🤖 Try Crescent", "growth:try_crescent")
     .row()
     .text("🏠 Main Menu", "menu:main")
     .text("🔗 Invite friends", "growth:invite")
@@ -142,18 +142,40 @@ export function growthWelcomeKeyboard(): InlineKeyboard {
     .text("💳 Upgrade", "access:plans");
 }
 
-export function growthWelcomeText(name: string, isNew: boolean): string {
-  return (
-    `⚡ *BOT-COMMAND-CENTRAL*\n━━━━━━━━━━━━━━━━━━\n\n` +
-    `Hey *${name}*!\n\n` +
+/**
+ * @param displayName - first name or @username
+ * @param isNew - first-time free unlock
+ * @param asOwner - owner sees unlimited, never free-tier limits
+ */
+export function growthWelcomeText(
+  displayName: string,
+  isNew: boolean,
+  asOwner = false,
+): string {
+  const who = displayName.startsWith("@") ? displayName : `*${displayName}*`;
+  let body =
+    `🌙 *Crescent*\n━━━━━━━━━━━━━━━━━━\n\n` +
+    `Hey ${who}\n` +
+    `Welcome to *God of Credentials* bot.\n\n` +
     `Your AI secretary in Telegram:\n` +
-    `• 🤖 *Crescent AI* — chat, images, briefings\n` +
+    `• 🤖 *Crescent* — chat, images, briefings\n` +
     `• ☀️ Daily digest at 10:00 Nairobi\n` +
-    `• 🛍️ Shop & tools for members\n\n` +
-    (isNew
-      ? `🟢 *Free access unlocked* — 10 Crescent queries/day.\n`
-      : `🟢 Free tier: limited Crescent + shop.\n`) +
-    `Invite friends → earn bonus AI queries.\n\n` +
-    `_Tap Try Crescent or open the menu._`
-  );
+    `• 🛍️ Shop & tools for members\n\n`;
+
+  if (asOwner) {
+    body +=
+      `👑 *Owner* — Crescent quota: *Unlimited* (no daily cap).\n` +
+      `Full control of access, shop, and kill switch.\n\n`;
+  } else if (isNew) {
+    body += `🟢 *Free access unlocked* — 10 Crescent queries/day.\n`;
+  } else {
+    body += `🟢 Free tier: limited Crescent + shop.\n`;
+  }
+
+  if (!asOwner) {
+    body += `Invite friends → earn bonus AI queries.\n\n`;
+  }
+
+  body += `_Tap Try Crescent or open the menu._`;
+  return body;
 }
