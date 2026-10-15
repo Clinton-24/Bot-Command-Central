@@ -46,10 +46,13 @@ export async function sendMainMenu(ctx: BotContext): Promise<void> {
     const access = await getAccess(userId).catch(() => null);
 
     if (!access || (!access.isApproved && !access.isPending)) {
-      const name = ctx.from?.first_name ?? "User";
+      const name = ctx.from?.username
+        ? `@${ctx.from.username}`
+        : (ctx.from?.first_name ?? "User");
       const gateText =
-        `⚡ *BOT-COMMAND-CENTRAL*\n━━━━━━━━━━━━━━━━━━\n\n` +
-        `Welcome, *${name}*.\n\n` +
+        `🌙 *Crescent*\n━━━━━━━━━━━━━━━━━━\n\n` +
+        `Hey ${name}\n` +
+        `Welcome to *God of Credentials* bot.\n\n` +
         `🟢 Free access: send /start to auto-unlock.\n` +
         `Or use a referral link / invite code.\n\n` +
         `💳 *Premium / VIP* — higher shop limits.`;
@@ -93,9 +96,9 @@ export async function sendMainMenu(ctx: BotContext): Promise<void> {
   }
 
   const text =
-    `⚡ *BOT PANEL*\n` +
+    `🌙 *Crescent*\n` +
     `━━━━━━━━━━━━━━━━━━\n\n` +
-    `Welcome! Select a service:`;
+    `*God of Credentials* — select a service:`;
   const kb = mainMenuKeyboard(ctx.from?.id);
   if (ctx.callbackQuery) {
     try {
