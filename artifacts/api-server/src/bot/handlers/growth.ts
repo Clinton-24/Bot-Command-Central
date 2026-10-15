@@ -1,22 +1,20 @@
 /**
  * Growth / onboarding helpers
- * - Auto free tier on first /start
- * - Deep-link referrals: t.me/bot?start=ref_<telegramId>
- * - Two-sided rewards (invitee free access, inviter bonus Crescent credits)
- *
  * NOTE: Do NOT import from ../index (circular with welcome → index).
  */
 import { InlineKeyboard } from "grammy";
-import type { Api, Bot } from "grammy";
 import { eq } from "drizzle-orm";
 import { db, accessTable } from "@workspace/db";
-import type { BotContext } from "../context";
 import { isOwner } from "../helpers";
 import { logger } from "../../lib/logger";
 import { addBonusCredits, REFERRAL_BONUS_CREDITS } from "./crescent-quota";
 
-/** Minimal bot surface used by referral notify (avoids importing MyBot from index). */
-type NotifyBot = { api: Api };
+/** Minimal bot surface for notify (no import from index). */
+type NotifyBot = {
+  api: {
+    sendMessage: (chatId: number, text: string, other?: object) => Promise<unknown>;
+  };
+};
 
 export function botUsername(): string {
   return (process.env.BOT_USERNAME ?? "crescent07_bot").replace(/^@/, "");
@@ -30,7 +28,6 @@ export function shareFooter(): string {
   return `\n\n— via @${botUsername()} · /invite`;
 }
 
-/** Parse /start payload → referral inviter id or null */
 export function parseReferralPayload(payload: string | undefined): number | null {
   if (!payload) return null;
   const m = payload.trim().match(/^ref[_-]?(\d{5,15})$/i);
@@ -39,10 +36,6 @@ export function parseReferralPayload(payload: string | undefined): number | null
   return Number.isFinite(id) && id > 0 ? id : null;
 }
 
-/**
- * Ensure user has free approved access (self-serve).
- * Does not change blocked / premium / vip / already-approved users.
- */
 export async function ensureAutoFreeAccess(user: {
   id: number;
   username?: string | null;
@@ -83,12 +76,10 @@ export async function ensureAutoFreeAccess(user: {
     return "created";
   } catch (err) {
     logger.error({ err, userId: user.id }, "ensureAutoFreeAccess failed");
-    // Don't block the bot if DB hiccups
     return "already";
   }
 }
 
-/** Apply referral: approve invitee (free) + bonus credits to inviter */
 export async function applyReferralReward(
   bot: NotifyBot,
   invitee: { id: number; username?: string | null; firstName?: string | null },
@@ -138,10 +129,7 @@ export async function applyReferralReward(
     const ownerId = Number(process.env.BOT_OWNER_ID ?? "0");
     if (ownerId) {
       await bot.api
-        .sendMessage(
-          ownerId,
-          `🤝 New referral\nInvitee: ${invitee.id}\nInviter: ${inviterId}`,
-        )
+        .sendMessage(ownerId, `🤝 New referral\nInvitee: ${invitee.id}\nInviter: ${inviterId}`)
         .catch(() => {});
     }
 
@@ -152,7 +140,6 @@ export async function applyReferralReward(
   }
 }
 
-/** Welcome buttons — owner only gets Crescent + Main Menu */
 export function growthWelcomeKeyboard(asOwner = false): InlineKeyboard {
   if (asOwner) {
     return new InlineKeyboard()
@@ -169,11 +156,6 @@ export function growthWelcomeKeyboard(asOwner = false): InlineKeyboard {
     .text("💳 Upgrade", "access:plans");
 }
 
-/**
- * @param displayName - first name or @username
- * @param isNew - first-time free unlock
- * @param asOwner - owner sees unlimited, never free-tier limits
- */
 export function growthWelcomeText(
   displayName: string,
   isNew: boolean,
