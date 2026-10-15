@@ -35,7 +35,6 @@ export function mainMenuKeyboard(userId?: number): InlineKeyboard {
 }
 
 export async function sendMainMenu(ctx: BotContext): Promise<void> {
-  // Leaving any screen for main menu ends Crescent chat mode
   ctx.session.crescentMode = false;
   if (ctx.session.pendingAction === "hexagon:input") {
     ctx.session.pendingAction = undefined;
@@ -51,15 +50,17 @@ export async function sendMainMenu(ctx: BotContext): Promise<void> {
       const gateText =
         `⚡ *BOT-COMMAND-CENTRAL*\n━━━━━━━━━━━━━━━━━━\n\n` +
         `Welcome, *${name}*.\n\n` +
-        `🔐 Private platform.\n\n` +
-        `🟢 *Free* — only if referred by an *active* user (@username or ID). Limited shop + 10 Crescent queries/day.\n\n` +
-        `No referral? Buy *Premium* or *VIP* for instant access.`;
+        `🟢 Free access: send /start to auto-unlock.\n` +
+        `Or use a referral link / invite code.\n\n` +
+        `💳 *Premium / VIP* — higher shop limits.`;
       const gateKb = new InlineKeyboard()
+        .text("🔄 Unlock free access", "growth:try_crescent")
+        .row()
         .text("🎟️ Enter referral / code", "access:invite")
         .row()
         .text("💳 Buy Premium / VIP", "access:plans")
         .row()
-        .text("🔑 Ask owner (free request)", "access:request");
+        .text("🔑 Ask owner", "access:request");
       if (ctx.callbackQuery) {
         try {
           await ctx.answerCallbackQuery();
@@ -179,7 +180,6 @@ export function registerMenuHandlers(bot: MyBot): void {
       return;
     }
 
-    // Sticky Crescent mode: stay on after Chat button until /exit or Main Menu
     if (ctx.session.crescentMode || ctx.session.pendingAction === "hexagon:input") {
       ctx.session.crescentMode = true;
       ctx.session.pendingAction = "hexagon:input";
@@ -293,26 +293,12 @@ export function registerMenuHandlers(bot: MyBot): void {
     const text =
       `❓ *COMMAND REFERENCE*\n` +
       `━━━━━━━━━━━━━━━━━━\n\n` +
-      `🛒 *Shop*\n` +
-      `/buy · /order <id> · /orders · /cancelorder\n\n` +
-      `💳 *Card Tools*\n` +
-      `/chk CARD|MM|YY|CVV\n` +
-      `/rzp CARD|MM|YY|CVV\n` +
-      `/bin XXXXXX · /gen XXXXXX\n\n` +
-      `📥 *Social (DM only)*\n` +
-      `/fb /insta /snap /pin [URL]\n\n` +
-      `📅 *Meetings*\n` +
-      `/schedule · /meetings\n\n` +
       `🤖 *Crescent AI*\n` +
-      `/crescent · /ai [question]\n` +
-      `/clearai · /exit\n\n` +
+      `/crescent · /invite · /briefing · /exit\n\n` +
+      `🛒 *Shop*\n` +
+      `/buy · /orders\n\n` +
       `🩺 *Status*\n` +
-      `/health\n\n` +
-      `👥 *Group Admin*\n` +
-      `/warn · /ban · /mute · /unban · /unmute\n` +
-      `/bl · /unbl · /bllist\n` +
-      `/links · /forwards · /captcha · /antispam\n` +
-      `/setwelcome · /pin · /unpin · /settings\n\n` +
+      `/health · /ping · /id\n\n` +
       `📢 *Owner*\n` +
       `/broadcast · /stats` +
       (isOwnerUser ? `\n/kill · /unkill · /hex · /access` : "");
