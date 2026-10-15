@@ -8,6 +8,7 @@ import { createCryptoBotRouter } from "./bot/handlers/cryptobot";
 import { getKillStatus } from "./bot/handlers/kill";
 import { isGmailOAuthAppConfigured, exchangeCodeAndSave, verifyOAuthState } from "./lib/gmail";
 import { pool } from "@workspace/db";
+import type { Request, Response, NextFunction } from "express";
 
 const rawPort = process.env["PORT"];
 if (!rawPort) throw new Error("PORT environment variable is required");
@@ -15,13 +16,26 @@ const port = Number(rawPort);
 
 const bot = getBotInstance();
 registerBatteryWebhook(app, bot);
-app.post("/bot", webhookCallback(bot, "express"));
+
+// Grammy webhook — never return 500 to Telegram (retries storm); log and ack
+const handleUpdate = webhookCallback(bot, "express");
+app.post("/bot", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    await handleUpdate(req, res, next);
+  } catch (err) {
+    logger.error({ err }, "webhook handler crashed");
+    if (!res.headersSent) {
+      res.status(200).json({ ok: true });
+    }
+  }
+});
+
 app.use("/api", createCryptoBotRouter(bot));
 
 app.get("/", (_req, res) => {
   const kill = getKillStatus();
   res.status(200).json({
-    service: "Bot-Command-Central",
+    service: "Crescent",
     status: kill.killed ? "killed" : "ok",
     health: "/health",
     uptime: process.uptime(),
@@ -62,8 +76,8 @@ app.get("/test-ai", async (_req, res) => {
     return res.json({ ok: false, error: "OPENROUTER_API_KEY not set" });
   }
   const models = [
-    "google/gemma-2-9b-it:free",
-    "meta-llama/llama-3.2-3b-instruct:free",
+    "openrouter/free",
+    "google/gemma-4-26b-a4b-it:free",
     "openai/gpt-4o-mini",
   ];
   const results: Record<string, string> = {};
@@ -77,15 +91,14 @@ app.get("/test-ai", async (_req, res) => {
         },
         body: JSON.stringify({
           model,
-          messages: [{ role: "user", content: "Reply with OK" }],
+          messages: [{ role: "user", content: "Reply with OK only" }],
           max_tokens: 8,
         }),
-        signal: AbortSignal.timeout(20_000),
       });
-      const body = await r.json();
+      const j = (await r.json()) as { choices?: { message?: { content?: string } }[]; error?: { message?: string } };
       results[model] = r.ok
-        ? String(body?.choices?.[0]?.message?.content ?? "empty").slice(0, 80)
-        : `${r.status} ${JSON.stringify(body?.error ?? body).slice(0, 120)}`;
+        ? (j.choices?.[0]?.message?.content ?? "ok").slice(0, 80)
+        : `ERR ${r.status}: ${j.error?.message ?? r.statusText}`;
     } catch (e) {
       results[model] = e instanceof Error ? e.message : String(e);
     }
@@ -93,10 +106,10 @@ app.get("/test-ai", async (_req, res) => {
   res.json({ ok: true, results });
 });
 
-app.get("/oauth/google/callback", async (req, res) => {
+app.get("/auth/gmail/callback", async (req, res) => {
   try {
-    const code = typeof req.query.code === "string" ? req.query.code : "";
-    const state = typeof req.query.state === "string" ? req.query.state : "";
+    const code = typeof req.query.code === "string" ? req.query.code : undefined;
+    const state = typeof req.query.state === "string" ? req.query.state : undefined;
     const userId = verifyOAuthState(state);
     if (!userId || !code) {
       res.status(400).send("<h2>Invalid or expired link</h2><p>Go back to Telegram and run /connect_gmail again.</p>");
