@@ -1,7 +1,5 @@
-# Live free models on OpenRouter as of 2026-10-15
-# Dead IDs (removed from catalog): google/gemma-2-9b-it:free, meta-llama/llama-3.2-3b-instruct:free
-# openrouter/free = auto-router that picks any available free model
-# gpt-4o-mini needs OpenRouter credits OR OPENAI_API_KEY
+# Free-only routing — avoids OpenRouter 402 (no credits / max_tokens)
+# Live free IDs checked 2026-10-16. Paid models only as last resort if key has balance.
 
 taskrouting:
   chat:
@@ -11,52 +9,53 @@ taskrouting:
       - "google/gemma-4-31b-it:free"
       - "liquid/lfm-2.5-2.6b:free"
       - "nvidia/nemotron-3-super-120b-a12b:free"
-      - "openai/gpt-4o-mini"
+      - "nvidia/nemotron-3-ultra-550b-a55b:free"
+      - "thinkingmachines/inkling:free"
+      - "poolside/laguna-s-2.1:free"
     params:
-      maxtokens: 1200
+      maxtokens: 512
       temperature: 0.3
   analysis:
     primary: "google/gemma-4-26b-a4b-it:free"
     fallbacks:
       - "openrouter/free"
+      - "google/gemma-4-31b-it:free"
       - "nvidia/nemotron-3-super-120b-a12b:free"
-      - "openai/gpt-4o-mini"
     params:
-      maxtokens: 2500
+      maxtokens: 800
       temperature: 0.1
   code:
     primary: "cohere/north-mini-code:free"
     fallbacks:
       - "google/gemma-4-26b-a4b-it:free"
       - "openrouter/free"
-      - "openai/gpt-4o-mini"
     params:
-      maxtokens: 4000
+      maxtokens: 1024
       temperature: 0.0
   math:
     primary: "google/gemma-4-26b-a4b-it:free"
     fallbacks:
       - "openrouter/free"
-      - "openai/gpt-4o-mini"
+      - "nvidia/nemotron-3-super-120b-a12b:free"
     params:
-      maxtokens: 1500
+      maxtokens: 512
       temperature: 0.0
   creative:
     primary: "openrouter/free"
     fallbacks:
       - "google/gemma-4-31b-it:free"
-      - "openai/gpt-4o-mini"
+      - "liquid/lfm-2.5-2.6b:free"
     params:
-      maxtokens: 2000
+      maxtokens: 600
       temperature: 0.7
   vision:
     primary: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
     fallbacks:
+      - "nvidia/nemotron-3.5-super-vl:free"
       - "google/gemma-4-26b-a4b-it:free"
-      - "openai/gpt-4o-mini"
-      - "openai/gpt-4o"
+      - "openrouter/free"
     params:
-      maxtokens: 2000
+      maxtokens: 600
       temperature: 0.2
 
 providers:
@@ -74,7 +73,7 @@ providers:
     models: ["*"]
 
 defaults:
-  timeoutseconds: 45
+  timeoutseconds: 30
   maxretries: 1
   retrybackoffbase: 1.2
   embedmodel: "text-embedding-3-small"
