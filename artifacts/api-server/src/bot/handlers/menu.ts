@@ -112,6 +112,17 @@ export async function sendMainMenu(ctx: BotContext): Promise<void> {
   }
 }
 
+/** Legacy shop menu (used by shop.ts handlers). Prefer CardShop. */
+export function shopMenuKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("📦 Browse Products", "shop:browse")
+    .row()
+    .text("📋 My Orders", "shop:orders")
+    .text("❌ Cancel Order", "shop:cancel")
+    .row()
+    .text("🔙 Main Menu", "menu:main");
+}
+
 export function cardShopRedirectKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text("🛍️ Open CardShop", "cardshop:main")
@@ -285,20 +296,37 @@ export function registerMenuHandlers(bot: MyBot): void {
     }
     const isOwnerUser = ctx.from && isOwner(ctx.from.id);
     const text =
-      `❓ *COMMAND REFERENCE*\n` +
+      `❓ COMMAND REFERENCE\n` +
       `━━━━━━━━━━━━━━━━━━\n\n` +
-      `🤖 *Crescent AI*\n` +
-      `/crescent · /invite · /briefing · /exit\n\n` +
-      `🛒 *Shop*\n` +
-      `/buy · /orders\n\n` +
-      `🩺 *Status*\n` +
-      `/health · /ping · /id\n\n` +
-      `📢 *Owner*\n` +
-      `/broadcast · /stats` +
-      (isOwnerUser ? `\n/kill · /unkill · /hex · /access` : "");
-    await ctx.editMessageText(text, {
-      parse_mode: "Markdown",
-      reply_markup: new InlineKeyboard().text("🔙 Main Menu", "menu:main"),
-    });
+      `🤖 CRESCENT AI\n` +
+      `/crescent — open chat mode\n` +
+      `/briefing — daily briefing\n` +
+      `/imagine <prompt> — generate image\n` +
+      `/exit — leave chat mode\n` +
+      `/invite — your referral link\n\n` +
+      `🛒 SHOP\n` +
+      `/shop · /buy — open CardShop\n` +
+      `/orders · /myorders — your orders\n\n` +
+      `⏰ REMINDERS & MAIL\n` +
+      `/remind <time> <msg> — set reminder\n` +
+      `/reminders — list reminders\n` +
+      `/digest — send daily digest now\n` +
+      `/connect_gmail · /inbox\n\n` +
+      `🩺 STATUS\n` +
+      `/health · /ping · /id · /menu\n\n` +
+      `💳 TIERS\n` +
+      `/subscribe · /plans — Premium / VIP\n\n` +
+      (isOwnerUser
+        ? `📢 OWNER\n/broadcast · /stats · /kill · /unkill\n/hex · /access · /online\n`
+        : `📢 Need more? Upgrade with /plans\n`);
+    try {
+      await ctx.editMessageText(text, {
+        reply_markup: new InlineKeyboard().text("🔙 Main Menu", "menu:main"),
+      });
+    } catch {
+      await ctx.reply(text, {
+        reply_markup: new InlineKeyboard().text("🔙 Main Menu", "menu:main"),
+      });
+    }
   });
 }
