@@ -31,7 +31,7 @@ const COIN_INFO: Record<string, { emoji: string; network: string }> = {
   ETH: { emoji: "⬜", network: "Ethereum" },
 };
 
-/** Curated legitimate .onion resources — $10 each. Official/public services only. */
+/** Curated legitimate .onion resources — $10 each. Official/public services only. No markets. */
 const TOR_LINK_PRICE = "10.00";
 const TOR_LINKS: {
   id: string;
@@ -43,44 +43,114 @@ const TOR_LINKS: {
   {
     id: "ddg",
     name: "DuckDuckGo Search (Onion)",
-    about: "Official privacy search engine on Tor. Same DuckDuckGo you know, over the onion network.",
-    finds: "Web search without exit-node tracking; mirrors clearnet results.",
+    about: "Official privacy search engine on Tor.",
+    finds: "Web search without exit-node tracking.",
     onion: "https://duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion",
   },
   {
     id: "torproject",
     name: "Tor Project Official",
-    about: "The official Tor Project website on onion. Docs, downloads, and project news.",
-    finds: "Tor Browser downloads, documentation, support, and security advisories.",
+    about: "The official Tor Project website on onion.",
+    finds: "Tor Browser downloads, documentation, support.",
     onion: "http://2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion",
   },
   {
     id: "protonmail",
     name: "Proton Mail (Onion)",
-    about: "Proton’s end-to-end encrypted email, reachable via Tor for maximum privacy.",
-    finds: "Secure inbox login and account access without exposing your IP to the clearnet endpoint.",
+    about: "Proton’s end-to-end encrypted email over Tor.",
+    finds: "Secure inbox without exposing your IP to clearnet endpoints.",
     onion: "https://protonmailrmez3lotccipshtkleegetolb73fuirgj7r4o4vfu7ozyd.onion",
   },
   {
     id: "nytimes",
     name: "The New York Times (Onion)",
-    about: "NYT’s official onion mirror for readers in censored or high-surveillance regions.",
-    finds: "Full NYT journalism and archives over Tor.",
+    about: "NYT’s official onion mirror.",
+    finds: "Full NYT journalism over Tor.",
     onion: "https://www.nytimes3xbfgragh.onion",
   },
   {
     id: "bbc",
     name: "BBC News (Onion)",
-    about: "BBC’s official onion service for news access where clearnet BBC is blocked.",
-    finds: "BBC World Service and news coverage over Tor.",
+    about: "BBC’s official onion service.",
+    finds: "BBC news coverage over Tor.",
     onion: "https://www.bbcnewsd73hkzno2ini43a6qrcunjqz37yvnpkb6qazsykquxpd5tlq.onion",
   },
   {
     id: "facebook",
     name: "Facebook / Meta (Onion)",
-    about: "Meta’s official Facebook onion for logging in over Tor.",
-    finds: "Facebook account access without clearnet Facebook endpoints.",
+    about: "Meta’s official Facebook onion.",
+    finds: "Facebook login over Tor.",
     onion: "https://www.facebookwkhpilnemxj7asaniu7vnjjbiltxjqhye3mhbshg7kx5tfayd.onion",
+  },
+  {
+    id: "propublica",
+    name: "ProPublica (Onion)",
+    about: "Independent nonprofit investigative journalism. Official onion mirror.",
+    finds: "Investigations and news without clearnet censorship friction.",
+    onion: "https://www.propub3r6espa33w.onion",
+  },
+  {
+    id: "cia",
+    name: "CIA.gov (Onion)",
+    about: "U.S. Central Intelligence Agency public website on Tor.",
+    finds: "Public CIA.gov content (careers, news, history) over Tor.",
+    onion: "http://ciadotgov4sjwlzihbbgxnqg3xiyrg7so2r2o3lt5ceclq3qzt6gdaqd.onion",
+  },
+  {
+    id: "riseup",
+    name: "Riseup (Onion)",
+    about: "Activist-oriented email, lists, and VPN with strong privacy focus.",
+    finds: "Riseup account services and documentation over Tor.",
+    onion: "http://vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion",
+  },
+  {
+    id: "debian",
+    name: "Debian (Onion)",
+    about: "Official Debian Project onion services.",
+    finds: "Debian documentation and package info over Tor.",
+    onion: "http://5emwn4bxbrgkh6wqbthnkkmvsm5v256wtzlxupreztudshqu67ixn4qd.onion",
+  },
+  {
+    id: "keybase",
+    name: "Keybase (Onion)",
+    about: "Identity and encrypted chat with an official onion endpoint.",
+    finds: "Keybase profiles and secure messaging over Tor.",
+    onion: "http://keybase5wmilwokqirssclfnsqrjdsi7jdir5wy7y7iu3tanwdbfzoid.onion",
+  },
+  {
+    id: "cryptostorm",
+    name: "Cryptostorm VPN (Onion)",
+    about: "Privacy-focused VPN provider’s official onion site.",
+    finds: "VPN account info, configs, and support docs over Tor.",
+    onion: "http://stormwayszuh4jrt745bbigxiqvdpzllj7f3dxkjc3ew3mgmtedvmgsd.onion",
+  },
+  {
+    id: "dw",
+    name: "Deutsche Welle (Onion)",
+    about: "German international broadcaster’s onion service.",
+    finds: "DW world news in multiple languages over Tor.",
+    onion: "https://www.dwnewsgngmhlplxy6o2twt2ktxwjt7dyt4w4r7jmwj5xjnq.onion",
+  },
+  {
+    id: "securesdrop_guardian",
+    name: "Guardian SecureDrop",
+    about: "The Guardian’s whistleblower submission system (SecureDrop) on Tor.",
+    finds: "Anonymous tip submission to Guardian journalists — not a market.",
+    onion: "http://theguardian2d2mn.onion",
+  },
+  {
+    id: "qubes",
+    name: "Qubes OS (Onion)",
+    about: "Official Qubes OS project — security-by-isolation desktop OS.",
+    finds: "Downloads, docs, and project news for Qubes over Tor.",
+    onion: "http://qubesosfasa4zl54gj5gf5fjh3h5t6f2j4yq.onion",
+  },
+  {
+    id: "archive_today",
+    name: "Archive.today (Onion)",
+    about: "Webpage snapshot / archive service with Tor access.",
+    finds: "Save and view archived snapshots of public web pages.",
+    onion: "http://archiveiya74codqgiixo33q62qlrqtkgmcitqx5u2oeqnmn5bpcbiyd.onion",
   },
 ];
 
@@ -222,7 +292,6 @@ export function registerCardShopCallbacks(bot: MyBot): void {
     const visibleProducts = scoped.filter(
       (product) => priceLimit !== null && parseFloat(String(product.price)) <= priceLimit,
     );
-
     if (visibleProducts.length === 0) {
       await ctx.editMessageText(
         priceLimit === null
@@ -232,7 +301,6 @@ export function registerCardShopCallbacks(bot: MyBot): void {
       );
       return;
     }
-
     const catLabel = category ? `${catEmoji(category)} ${category.toUpperCase()}` : "PRODUCTS";
     const kb = new InlineKeyboard();
     for (const p of visibleProducts) {
@@ -242,7 +310,6 @@ export function registerCardShopCallbacks(bot: MyBot): void {
       ).row();
     }
     kb.text("🔙 Shop", "cardshop:main");
-
     await ctx.editMessageText(
       `🛍️ *${catLabel}*\n━━━━━━━━━━━━━━━━━━\n\n${visibleProducts.length} product(s):`,
       { parse_mode: "Markdown", reply_markup: kb }
@@ -271,7 +338,6 @@ export function registerCardShopCallbacks(bot: MyBot): void {
       });
       return;
     }
-    const coins = await getAvailableCoins();
     await ctx.editMessageText(
       `${catEmoji(p.category)} ${p.name}\n━━━━━━━━━━━━━━━━━━\n\n` +
         `💰 $${parseFloat(String(p.price)).toFixed(2)}\n` +
@@ -591,7 +657,7 @@ export function registerCardShopCallbacks(bot: MyBot): void {
     kb.text("🔙 Shop", "cardshop:main");
     await ctx.editMessageText(
       `🧅 TOR LINKS\n━━━━━━━━━━━━━━━━━━\n\n` +
-        `Legitimate official .onion resources only.\n` +
+        `Legitimate official .onion resources only (no markets).\n` +
         `Each is $10 — you get what the site is, what it opens, and what you can do there.\n\n` +
         `Open delivered URLs only in Tor Browser.`,
       { reply_markup: kb },
