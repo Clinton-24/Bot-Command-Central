@@ -37,6 +37,13 @@ function catEmoji(cat: string): string {
   return CATEGORY_EMOJIS[cat] ?? "📦";
 }
 
+function stockLabel(stock: string | number | null | undefined): string {
+  const n = Number(stock);
+  if (!Number.isFinite(n) || n === 0 || n >= 9999) return "Unlimited";
+  if (n < 0) return "Out of stock";
+  return String(n);
+}
+
 function hexPanelKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text("📦 Products", "hex:products")
@@ -115,7 +122,7 @@ async function showProductManage(ctx: BotContext, id: number): Promise<void> {
     `Category: ${p.category || "general"}\n` +
     `Status: ${p.isActive ? "Active" : "Disabled"}\n` +
     `Delivery: ${p.deliveryType || "manual"}\n` +
-    `Stock: ${p.stock}\n` +
+    `Stock: ${stockLabel(p.stock)}\n` +
     (p.description ? `\nDescription:\n${p.description}\n` : "\nNo description.\n") +
     `\nTap a button below to manage this product.`;
   const kb = productManageKeyboard(id, p.isActive);
@@ -140,7 +147,8 @@ async function saveNewProduct(ctx: BotContext): Promise<void> {
       deliveryType: draft.deliveryType ?? "manual",
       deliveryContent: draft.deliveryContent ?? null,
       isActive: true,
-      stock: "9999",
+      // 0 = unlimited digital stock (shown as Unlimited everywhere)
+      stock: "0",
     })
     .returning();
 
@@ -154,6 +162,7 @@ async function saveNewProduct(ctx: BotContext): Promise<void> {
       `${emoji} ${draft.name}\n` +
       `💰 $${parseFloat(String(draft.price)).toFixed(2)}\n` +
       `📁 ${draft.category ?? "general"}\n` +
+      `Stock: Unlimited\n` +
       `ID: ${pid}\n\n` +
       `Tap Manage to edit it now.`,
     {
@@ -403,11 +412,13 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
     await db.update(productsTable).set({ isActive: false, updatedAt: new Date() }).where(eq(productsTable.id, id));
     await ctx.answerCallbackQuery("Disabled (soft delete)");
     try {
-      await ctx.editMessageText("Product disabled (hidden from shop).",
-        { reply_markup: new InlineKeyboard().text("📦 Products", "hex:products") });
+      await ctx.editMessageText("Product disabled (hidden from shop).", {
+        reply_markup: new InlineKeyboard().text("📦 Products", "hex:products"),
+      });
     } catch {
-      await ctx.reply("Product disabled (hidden from shop).",
-        { reply_markup: new InlineKeyboard().text("📦 Products", "hex:products") });
+      await ctx.reply("Product disabled (hidden from shop).", {
+        reply_markup: new InlineKeyboard().text("📦 Products", "hex:products"),
+      });
     }
   });
 
@@ -480,9 +491,15 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
     await ctx.answerCallbackQuery();
     const orders = await db.select().from(ordersTable).orderBy(desc(ordersTable.createdAt)).limit(20);
     if (orders.length === 0) {
-      await ctx.editMessageText("📋 No orders yet.", {
-        reply_markup: new InlineKeyboard().text("🔙 Hex", "hex:main"),
-      }).catch(() => ctx.reply("📋 No orders yet.", { reply_markup: new InlineKeyboard().text("🔙 Hex", "hex:main") }));
+      await ctx
+        .editMessageText("📋 No orders yet.", {
+          reply_markup: new InlineKeyboard().text("🔙 Hex", "hex:main"),
+        })
+        .catch(() =>
+          ctx.reply("📋 No orders yet.", {
+            reply_markup: new InlineKeyboard().text("🔙 Hex", "hex:main"),
+          }),
+        );
       return;
     }
     const kb = new InlineKeyboard();
@@ -550,9 +567,11 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
     }
     await ctx.api.sendMessage(order.userId, buyerMsg).catch(() => {});
     await ctx.answerCallbackQuery("Confirmed");
-    await ctx.editMessageText(`✅ Order #${id} confirmed.`, {
-      reply_markup: new InlineKeyboard().text("📋 Orders", "hex:orders"),
-    }).catch(() => {});
+    await ctx
+      .editMessageText(`✅ Order #${id} confirmed.`, {
+        reply_markup: new InlineKeyboard().text("📋 Orders", "hex:orders"),
+      })
+      .catch(() => {});
   });
 
   bot.callbackQuery(/^hex:ocancel:(\d+)$/, async (ctx) => {
@@ -563,9 +582,11 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
     const id = parseInt(ctx.match[1]!, 10);
     await db.update(ordersTable).set({ status: "cancelled", updatedAt: new Date() }).where(eq(ordersTable.id, id));
     await ctx.answerCallbackQuery("Cancelled");
-    await ctx.editMessageText(`❌ Order #${id} cancelled.`, {
-      reply_markup: new InlineKeyboard().text("📋 Orders", "hex:orders"),
-    }).catch(() => {});
+    await ctx
+      .editMessageText(`❌ Order #${id} cancelled.`, {
+        reply_markup: new InlineKeyboard().text("📋 Orders", "hex:orders"),
+      })
+      .catch(() => {});
   });
 
   bot.callbackQuery("hex:payments", async (ctx) => {
@@ -574,10 +595,12 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
       return;
     }
     await ctx.answerCallbackQuery();
-    await ctx.editMessageText(
-      `💰 PAYMENT SETTINGS\n━━━━━━━━━━━━━━━━━━\n\nCryptoBot: set CRYPTOBOT_API_TOKEN on Render.\nManual wallets: configure in env / payments panel.`,
-      { reply_markup: new InlineKeyboard().text("🔙 Hex", "hex:main") },
-    ).catch(() => {});
+    await ctx
+      .editMessageText(
+        `💰 PAYMENT SETTINGS\n━━━━━━━━━━━━━━━━━━\n\nCryptoBot: set CRYPTOBOT_API_TOKEN on Render.\nManual wallets: configure in env / payments panel.`,
+        { reply_markup: new InlineKeyboard().text("🔙 Hex", "hex:main") },
+      )
+      .catch(() => {});
   });
 
   bot.callbackQuery("hex:stats", async (ctx) => {
@@ -590,10 +613,12 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
     const orders = await db.select().from(ordersTable);
     const active = products.filter((p) => p.isActive).length;
     const confirmed = orders.filter((o) => o.status === "confirmed").length;
-    await ctx.editMessageText(
-      `📊 STATS\n━━━━━━━━━━━━━━━━━━\n\n📦 Products: ${products.length} (${active} active)\n📋 Orders: ${orders.length} (${confirmed} confirmed)`,
-      { reply_markup: new InlineKeyboard().text("🔙 Hex", "hex:main") },
-    ).catch(() => {});
+    await ctx
+      .editMessageText(
+        `📊 STATS\n━━━━━━━━━━━━━━━━━━\n\n📦 Products: ${products.length} (${active} active)\n📋 Orders: ${orders.length} (${confirmed} confirmed)`,
+        { reply_markup: new InlineKeyboard().text("🔙 Hex", "hex:main") },
+      )
+      .catch(() => {});
   });
 
   bot.callbackQuery("hex:access", async (ctx) => {
@@ -602,9 +627,11 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
       return;
     }
     await ctx.answerCallbackQuery();
-    await ctx.editMessageText(
-      `🔑 ACCESS\n━━━━━━━━━━━━━━━━━━\n\nUse /access for the full access panel (users, invites, tiers).`,
-      { reply_markup: new InlineKeyboard().text("🔙 Hex", "hex:main") },
-    ).catch(() => {});
+    await ctx
+      .editMessageText(
+        `🔑 ACCESS\n━━━━━━━━━━━━━━━━━━\n\nUse /access for the full access panel (users, invites, tiers).`,
+        { reply_markup: new InlineKeyboard().text("🔙 Hex", "hex:main") },
+      )
+      .catch(() => {});
   });
 }
