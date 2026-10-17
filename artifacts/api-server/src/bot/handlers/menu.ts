@@ -42,7 +42,6 @@ export async function sendMainMenu(ctx: BotContext): Promise<void> {
   const userId = ctx.from?.id;
 
   if (userId && !isOwner(userId)) {
-    // Auto-grant free tier — no owner pending queue for normal use
     const { ensureAutoFreeAccess } = await import("./growth");
     await ensureAutoFreeAccess({
       id: userId,
@@ -112,7 +111,7 @@ export async function sendMainMenu(ctx: BotContext): Promise<void> {
   }
 }
 
-/** Legacy shop menu (used by shop.ts handlers). Prefer CardShop. */
+/** Legacy shop menu (shop.ts). Prefer CardShop. */
 export function shopMenuKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text("📦 Browse Products", "shop:browse")
@@ -286,6 +285,42 @@ export function registerMenuHandlers(bot: MyBot): void {
       `📅 *MEETINGS*\n━━━━━━━━━━━━━━━━━━\n\nSchedule and manage meetings.`,
       { parse_mode: "Markdown", reply_markup: meetingsMenuKeyboard() },
     );
+  });
+
+  bot.callbackQuery("menu:hexagon", async (ctx) => {
+    try {
+      await ctx.answerCallbackQuery();
+    } catch {
+      /* */
+    }
+    const { checkCrescentAccess } = await import("./access");
+    if (!(await checkCrescentAccess(ctx))) return;
+    const { enableCrescentChat } = await import("./hexagon");
+    enableCrescentChat(ctx);
+    await ctx.reply(
+      `🤖 CRESCENT AI\n━━━━━━━━━━━━━━━━━━\n\nChat mode is on. Send a message.\n\n/exit — leave · /briefing · /imagine`,
+      {
+        reply_markup: new InlineKeyboard()
+          .text("📋 Briefing", "hexagon:briefing")
+          .text("🎨 Imagine", "hexagon:imagine")
+          .row()
+          .text("🚪 Exit", "crescent:exit")
+          .text("🏠 Menu", "menu:main"),
+      },
+    );
+  });
+
+  bot.callbackQuery("crescent:exit", async (ctx) => {
+    try {
+      await ctx.answerCallbackQuery();
+    } catch {
+      /* */
+    }
+    const { disableCrescentChat } = await import("./hexagon");
+    disableCrescentChat(ctx);
+    await ctx.reply("👋 Left Crescent chat.\n\nTap 🤖 Crescent AI or /crescent anytime.", {
+      reply_markup: new InlineKeyboard().text("🏠 Main Menu", "menu:main"),
+    });
   });
 
   bot.callbackQuery("menu:help", async (ctx) => {
