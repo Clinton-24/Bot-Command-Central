@@ -23,10 +23,10 @@ export async function isCreator(ctx: Context, userId: number): Promise<boolean> 
 export function parseTime(timeStr: string): number | null {
   const match = timeStr.match(/^(\d+)(h|d|m)$/);
   if (!match) return null;
-  const amount = parseInt(match[1], 10);
-  const unit = match[2];
+  const amount = parseInt(match[1]!, 10);
+  const unit = match[2]!;
   const multipliers: Record<string, number> = { h: 3600, d: 86400, m: 2592000 };
-  return Date.now() / 1000 + amount * multipliers[unit];
+  return Date.now() / 1000 + amount * multipliers[unit]!;
 }
 
 export function formatUser(user: { first_name?: string; username?: string; id: number }): string {
@@ -53,8 +53,17 @@ export async function mustBeGroup(ctx: Context): Promise<boolean> {
   return true;
 }
 
+/**
+ * Owner = Telegram user ID(s) in BOT_OWNER_ID env.
+ * Supports a single ID or comma-separated list. Values are trimmed.
+ */
 export function isOwner(userId: number): boolean {
-  const ownerIdStr = process.env["BOT_OWNER_ID"];
-  if (!ownerIdStr) return false;
-  return String(userId) === ownerIdStr;
+  const raw = process.env["BOT_OWNER_ID"];
+  if (!raw) return false;
+  const id = String(userId);
+  return raw
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .includes(id);
 }
