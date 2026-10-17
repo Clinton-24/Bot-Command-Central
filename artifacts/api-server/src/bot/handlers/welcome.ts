@@ -1,20 +1,20 @@
 import { InlineKeyboard } from "grammy";
-import type { MyBot } from "../index";
-import { sendMainMenu } from "./menu";
-import { db } from "@workspace/db";
-import { usersTable, groupSettingsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { logger } from "../../lib/logger";
-import { isOwner } from "../helpers";
-import { handleInviteCode } from "./access";
+import { sendMainMenu } from "./menu";
 import {
-  applyReferralReward,
   ensureAutoFreeAccess,
   growthWelcomeKeyboard,
   growthWelcomeText,
   parseReferralPayload,
   referralLink,
+  applyReferralReward,
 } from "./growth";
+import { handleInviteCode } from "./access";
+import { isOwner } from "../helpers";
+import { db, usersTable } from "@workspace/db";
+import type { MyBot } from "../index";
+import type { BotContext } from "../context";
+import { logger } from "../../lib/logger";
 
 function displayName(from: { first_name?: string; username?: string }): string {
   if (from.username) return `@${from.username}`;
@@ -24,88 +24,26 @@ function displayName(from: { first_name?: string; username?: string }): string {
 export function registerWelcomeHandler(bot: MyBot): void {
   bot.on("message:new_chat_members", async (ctx) => {
     const chatId = ctx.chat.id;
-    const newMembers = ctx.message.new_chat_members;
-    const groupName = ctx.chat.title ?? "this group";
-
-    try {
-      const [settings] = await db
-        .select()
-        .from(groupSettingsTable)
-        .where(eq(groupSettingsTable.chatId, chatId));
-
-      for (const member of newMembers) {
-        if (member.is_bot) continue;
+    for (const member of ctx.message.new_chat_members) {
+      if (member.is_bot) continue;
+      try {
         await db
           .insert(usersTable)
           .values({
             id: member.id,
-            username: member.username,
-            firstName: member.first_name,
-            lastName: member.last_name,
+            username: member.username ?? null,
+            firstName: member.first_name ?? null,
           })
           .onConflictDoUpdate({
             target: usersTable.id,
-            set: { username: member.username, firstName: member.first_name, lastName: member.last_name },
+            set: {
+              username: member.username ?? null,
+              firstName: member.first_name ?? null,
+            },
           });
-
-        const name = member.first_name || member.username || "User";
-        const username = member.username ? `@${member.username}` : name;
-
-        if (settings?.welcomeMessage) {
-          const msg = settings.welcomeMessage
-            .replace(/\{name\}/g, name)
-            .replace(/\{username\}/g, username)
-            .replace(/\{group\}/g, groupName);
-
-          const kb = new InlineKeyboard();
-          if (settings.groupRules) {
-            kb.text("📜 Group Rules", `welcome:rules:${chatId}`);
-          }
-
-          await ctx.reply(msg, {
-            parse_mode: "Markdown",
-            reply_markup: settings.groupRules ? kb : undefined,
-          }).catch(() => {});
-        } else {
-          const defaultMsg =
-            `👋 Welcome to *${groupName}*, ${name}!\n\n` +
-            `We're glad to have you here. Please read the rules and enjoy your stay.`;
-
-          const kb = new InlineKeyboard();
-          if (settings?.groupRules) {
-            kb.text("📜 Group Rules", `welcome:rules:${chatId}`);
-          }
-
-          await ctx.reply(defaultMsg, {
-            parse_mode: "Markdown",
-            reply_markup: settings?.groupRules ? kb : undefined,
-          }).catch(() => {});
-        }
+      } catch (err) {
+        logger.warn({ err, chatId }, "new_chat_members user upsert failed");
       }
-    } catch (err) {
-      logger.error({ err }, "welcome handler error");
-    }
-  });
-
-  bot.callbackQuery(/^welcome:rules:(-?\d+)$/, async (ctx) => {
-    await ctx.answerCallbackQuery();
-    const chatId = parseInt(ctx.match[1]!);
-    try {
-      const [settings] = await db
-        .select()
-        .from(groupSettingsTable)
-        .where(eq(groupSettingsTable.chatId, chatId));
-
-      if (settings?.groupRules) {
-        await ctx.reply(
-          `📜 *Group Rules*\n━━━━━━━━━━━━━━━━━━\n\n${settings.groupRules}`,
-          { parse_mode: "Markdown" }
-        );
-      } else {
-        await ctx.answerCallbackQuery("No rules set for this group.");
-      }
-    } catch (err) {
-      logger.error({ err }, "rules callback error");
     }
   });
 
@@ -114,70 +52,56 @@ export function registerWelcomeHandler(bot: MyBot): void {
     if (!from) return;
 
     try {
-      await db.insert(usersTable).values({
-        id: from.id, username: from.username,
-        firstName: from.first_name, lastName: from.last_name,
-      }).onConflictDoUpdate({
-        target: usersTable.id,
-        set: { username: from.username, firstName: from.first_name, lastName: from.last_name },
-      });
+      await db
+        .insert(usersTable)
+        .values({
+          id: from.id,
+          username: from.username ?? null,
+          firstName: from.first_name ?? null,
+        })
+        .onConflictDoUpdate({
+          target: usersTable.id,
+          set: {
+            username: from.username ?? null,
+            firstName: from.first_name ?? null,
+          },
+        });
     } catch (err) {
-      logger.error({ err }, "start: failed to save user");
+      logger.warn({ err }, "start user upsert failed");
     }
 
-    const payload = ctx.match?.trim() ?? "";
-    const who = displayName(from);
     const owner = isOwner(from.id);
+    const payload = (ctx.match as string | undefined)?.trim() ?? "";
 
-    if (payload.startsWith("tier_subscription_")) {
-      await sendMainMenu(ctx);
-      return;
+    // Invite code deep link (non-ref)
+    if (payload && !payload.toLowerCase().startsWith("ref") && !owner) {
+      const handled = await handleInviteCode(bot, ctx, payload).catch(() => false);
+      if (handled) return;
     }
 
     const inviterId = parseReferralPayload(payload);
     if (inviterId && !owner) {
-      const rewarded = await applyReferralReward(
+      await applyReferralReward(
         bot,
         { id: from.id, username: from.username, firstName: from.first_name },
         inviterId,
       );
-      if (!rewarded) {
-        await ensureAutoFreeAccess({
-          id: from.id,
-          username: from.username,
-          firstName: from.first_name,
-        });
-      }
-      await ctx.reply(growthWelcomeText(who, true, false), {
-        parse_mode: "Markdown",
-        reply_markup: growthWelcomeKeyboard(false),
-      });
-      return;
     }
 
-    if (payload.length > 0 && !owner) {
-      await handleInviteCode(bot, ctx, payload);
-      return;
-    }
-
-    let isNew = false;
     if (!owner) {
-      const status = await ensureAutoFreeAccess({
+      await ensureAutoFreeAccess({
         id: from.id,
         username: from.username,
         firstName: from.first_name,
-      });
-      isNew = status === "created";
-      if (status === "blocked") {
-        await ctx.reply("🚫 Your account is blocked. Contact the owner if this is a mistake.");
-        return;
-      }
+      }).catch(() => {});
     }
 
-    await ctx.reply(growthWelcomeText(who, isNew, owner), {
+    const name = displayName(from);
+    await ctx.reply(growthWelcomeText(name, owner), {
       parse_mode: "Markdown",
       reply_markup: growthWelcomeKeyboard(owner),
     });
+    await sendMainMenu(ctx);
   });
 
   bot.command("invite", async (ctx) => {
@@ -185,16 +109,14 @@ export function registerWelcomeHandler(bot: MyBot): void {
     if (!from) return;
     const link = referralLink(from.id);
     await ctx.reply(
-      `🔗 *Your invite link*\n━━━━━━━━━━━━━━━━━━\n\n` +
+      `🔗 Your invite link\n━━━━━━━━━━━━━━━━━━\n\n` +
         `\`${link}\`\n\n` +
-        `Share it. When someone joins:\n` +
-        `• They get *free* access + Crescent AI\n` +
-        `• You get *+5 bonus* Crescent queries\n\n` +
-        `_Unlimited invites._`,
+        `• Friends get free access + Crescent AI\n` +
+        `• You get +5 Crescent bonus per join\n` +
+        `Unlimited invites.`,
       {
-        parse_mode: "Markdown",
         reply_markup: new InlineKeyboard()
-          .url("📤 Share link", `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent("Try Crescent — God of Credentials bot")}`)
+          .url("Share link", `https://t.me/share/url?url=${encodeURIComponent(link)}`)
           .row()
           .text("🏠 Main Menu", "menu:main"),
       },
@@ -207,12 +129,11 @@ export function registerWelcomeHandler(bot: MyBot): void {
     if (!from) return;
     const link = referralLink(from.id);
     await ctx.reply(
-      `🔗 *Your invite link*\n\n\`${link}\`\n\n` +
-        `Friends get free access. You get +5 Crescent bonus per join.`,
+      `🔗 Your invite link\n\n\`${link}\`\n\nFriends get free access. You get +5 Crescent bonus per join.`,
       {
-        parse_mode: "Markdown",
         reply_markup: new InlineKeyboard()
-          .url("📤 Share", `https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent("Try Crescent — God of Credentials bot")}`)
+          .url("Share", `https://t.me/share/url?url=${encodeURIComponent(link)}`)
+          .row()
           .text("🏠 Menu", "menu:main"),
       },
     );
@@ -225,18 +146,16 @@ export function registerWelcomeHandler(bot: MyBot): void {
         id: ctx.from!.id,
         username: ctx.from!.username,
         firstName: ctx.from!.first_name,
-      });
+      }).catch(() => {});
     }
     ctx.session.crescentMode = true;
-    ctx.session.pendingAction = undefined;
+    ctx.session.pendingAction = "hexagon:input";
     await ctx.reply(
-      `🤖 *Crescent is listening*\n━━━━━━━━━━━━━━━━━━\n\n` +
-        `Send any message or photo.\n` +
+      `🤖 CRESCENT AI\n━━━━━━━━━━━━━━━━━━\n\nChat mode is on. Send a message.\n\n` +
         `• /exit — leave chat mode\n` +
         `• /briefing — daily briefing\n` +
         (isOwner(ctx.from!.id) ? "" : "• /invite — earn bonus queries"),
       {
-        parse_mode: "Markdown",
         reply_markup: new InlineKeyboard()
           .text("🏠 Main Menu", "menu:main")
           .text("🚪 Exit chat", "crescent:exit"),
@@ -255,8 +174,7 @@ export function registerWelcomeHandler(bot: MyBot): void {
     await ctx.api.editMessageText(
       ctx.chat.id,
       msg.message_id,
-      `🏓 *Pong!*\n━━━━━━━━━━━━━━━━━━\n⚡ Response: ${elapsed}ms\n✅ Bot is online`,
-      { parse_mode: "Markdown" }
+      `🏓 Pong!\n━━━━━━━━━━━━━━━━━━\n⚡ Response: ${elapsed}ms\n✅ Bot is online`,
     );
   });
 
@@ -266,47 +184,40 @@ export function registerWelcomeHandler(bot: MyBot): void {
     const chatType = ctx.chat.type;
     const isGroup = chatType === "group" || chatType === "supergroup";
     await ctx.reply(
-      `🪪 *Your Info*\n━━━━━━━━━━━━━━━━━━\n` +
+      `🪪 Your Info\n━━━━━━━━━━━━━━━━━━\n` +
         `👤 Name: ${from.first_name}${from.last_name ? ` ${from.last_name}` : ""}\n` +
-        `🆔 User ID: \`${from.id}\`\n` +
+        `🆔 User ID: ${from.id}\n` +
         (from.username ? `📛 Username: @${from.username}\n` : "") +
-        (isGroup ? `\n💬 Chat ID: \`${ctx.chat.id}\`\n📂 Chat: ${(ctx.chat as { title?: string }).title ?? "Group"}` : ""),
-      { parse_mode: "Markdown" }
+        (isGroup
+          ? `\n💬 Chat ID: ${ctx.chat.id}\n📂 Chat: ${(ctx.chat as { title?: string }).title ?? "Group"}`
+          : ""),
     );
   });
 
   bot.command("report", async (ctx) => {
     const from = ctx.from;
     if (!from) return;
-    const reason = ctx.match?.trim();
+    const reason = (ctx.match as string | undefined)?.trim() ?? "";
     if (!reason) {
-      await ctx.reply("Usage: /report <reason>\n\nExample: /report Spam in group");
+      await ctx.reply("Usage: /report <reason>");
       return;
     }
-
-    const ownerIdStr = process.env["BOT_OWNER_ID"];
-    if (!ownerIdStr) {
-      await ctx.reply("⚠️ Report system not configured.");
+    const ownerId = parseInt(process.env.BOT_OWNER_ID ?? "0");
+    if (!ownerId) {
+      await ctx.reply("Report received. Owner will review.");
       return;
     }
-
-    const ownerId = parseInt(ownerIdStr, 10);
-    const chatInfo = ctx.chat.type !== "private"
-      ? `\n💬 Chat: ${(ctx.chat as { title?: string }).title ?? "Unknown"} (\`${ctx.chat.id}\`)`
-      : "";
-
     try {
-      await ctx.api.sendMessage(
+      await bot.api.sendMessage(
         ownerId,
-        `🚨 *USER REPORT*\n━━━━━━━━━━━━━━━━━━\n\n` +
-          `👤 From: ${from.first_name}${from.username ? ` (@${from.username})` : ""}\n` +
-          `🆔 ID: \`${from.id}\`${chatInfo}\n\n` +
-          `📝 Reason:\n${reason}`,
-        { parse_mode: "Markdown" }
+        `🚨 REPORT\n━━━━━━━━━━━━━━━━━━\n\n` +
+          `From: ${from.first_name} (${from.id})\n` +
+          (from.username ? `@${from.username}\n` : "") +
+          `\n${reason}`,
       );
-      await ctx.reply("✅ Your report has been sent to the admin. Thank you!");
+      await ctx.reply("✅ Report sent to admin.");
     } catch (err) {
-      logger.error({ err }, "report command error");
+      logger.error({ err }, "report failed");
       await ctx.reply("❌ Failed to send report. Please try again.");
     }
   });
@@ -314,25 +225,33 @@ export function registerWelcomeHandler(bot: MyBot): void {
   bot.command("help", async (ctx) => {
     const owner = ctx.from ? isOwner(ctx.from.id) : false;
     await ctx.reply(
-      `⚡ *CRESCENT — COMMANDS*\n` +
+      `⚡ CRESCENT — COMMANDS\n` +
         `━━━━━━━━━━━━━━━━━━\n\n` +
-        `🤖 *CRESCENT AI*\n` +
+        `🤖 CRESCENT AI\n` +
         `/crescent — Chat with Crescent\n` +
-        (owner ? "" : `/invite — Your referral link (+5 bonus)\n`) +
-        `/briefing — Daily briefing\n\n` +
-        `🛠️ *GENERAL*\n` +
-        `/ping — Latency check\n` +
-        `/id — Your Telegram ID\n` +
-        `/menu — Main menu\n` +
-        `/report <reason> — Report to admin\n\n` +
-        `📢 *OWNER*\n` +
-        `/broadcast · /stats · /hex · /access`,
+        `/briefing — Daily briefing\n` +
+        `/imagine <prompt> — Generate image\n` +
+        `/exit — Leave chat mode\n` +
+        (owner ? "" : `/invite — Referral link (+5 bonus)\n`) +
+        `\n🛒 SHOP\n` +
+        `/shop · /buy — Open CardShop\n` +
+        `/orders · /myorders — Your orders\n` +
+        `\n⏰ REMINDERS\n` +
+        `/remind <time> <msg> · /reminders · /digest\n` +
+        `/connect_gmail · /inbox\n` +
+        `\n🩺 STATUS\n` +
+        `/health · /ping · /id · /menu\n` +
+        `/report <reason> — Report to admin\n` +
+        `\n💳 TIERS\n` +
+        `/subscribe · /plans — Premium / VIP\n` +
+        (owner
+          ? `\n📢 OWNER\n/broadcast · /stats · /kill · /unkill\n/hex · /access · /online\n`
+          : ""),
       {
-        parse_mode: "Markdown",
         reply_markup: new InlineKeyboard()
           .text("🤖 Try Crescent", "growth:try_crescent")
           .text("🏠 Main Menu", "menu:main"),
-      }
+      },
     );
   });
 }
