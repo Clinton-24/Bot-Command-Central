@@ -48,7 +48,7 @@ export async function runMigrations(): Promise<void> {
         invoice_id INTEGER UNIQUE,
         status TEXT NOT NULL DEFAULT 'pending',
         created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        confirmed_at TIMESTAMP
+        paid_at TIMESTAMP
       );
     `);
 
@@ -56,44 +56,10 @@ export async function runMigrations(): Promise<void> {
       CREATE TABLE IF NOT EXISTS crescent_quota_credits (
         user_id BIGINT PRIMARY KEY,
         credits INTEGER NOT NULL DEFAULT 0,
-        daily_date TEXT,
         daily_used INTEGER NOT NULL DEFAULT 0,
+        daily_date TEXT NOT NULL DEFAULT '',
         updated_at TIMESTAMP NOT NULL DEFAULT NOW()
       );
-    `);
-
-    await client.query(`
-      ALTER TABLE crescent_quota_credits
-        ADD COLUMN IF NOT EXISTS daily_date TEXT,
-        ADD COLUMN IF NOT EXISTS daily_used INTEGER NOT NULL DEFAULT 0;
-    `);
-
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS access (
-        id SERIAL PRIMARY KEY,
-        user_id BIGINT NOT NULL UNIQUE,
-        username TEXT,
-        first_name TEXT,
-        tier TEXT NOT NULL DEFAULT 'free',
-        is_approved BOOLEAN NOT NULL DEFAULT FALSE,
-        is_pending BOOLEAN NOT NULL DEFAULT FALSE,
-        request_message TEXT,
-        approved_at TIMESTAMP,
-        approved_by BIGINT,
-        expires_at TIMESTAMP,
-        blocked_at TIMESTAMP,
-        blocked_reason TEXT,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        last_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
-        total_messages INTEGER NOT NULL DEFAULT 0,
-        invite_code TEXT,
-        invited_by BIGINT
-      );
-    `);
-
-    await client.query(`
-      ALTER TABLE IF EXISTS access
-        ADD COLUMN IF NOT EXISTS invited_by BIGINT;
     `);
 
     await client.query(`
@@ -144,83 +110,6 @@ export async function runMigrations(): Promise<void> {
     `);
 
     await client.query(`
-      CREATE TABLE IF NOT EXISTS tier_subscriptions (
-        id SERIAL PRIMARY KEY,
-        user_id BIGINT NOT NULL,
-        tier TEXT NOT NULL,
-        amount NUMERIC(10, 2) NOT NULL,
-        coin TEXT NOT NULL,
-        address TEXT NOT NULL,
-        reference TEXT NOT NULL UNIQUE,
-        invoice_id INTEGER UNIQUE,
-        status TEXT NOT NULL DEFAULT 'pending',
-        claimed_at TIMESTAMP,
-        confirmed_at TIMESTAMP,
-        starts_at TIMESTAMP,
-        expires_at TIMESTAMP,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
-      );
-    `);
-
-    let hasVectorExtension = true;
-    try {
-      await client.query("CREATE EXTENSION IF NOT EXISTS vector");
-    } catch (err) {
-      hasVectorExtension = false;
-      logger.warn({ err }, "pgvector extension unavailable; AI memory will use text-only persistence");
-    }
-
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS ai_memory (
-        id SERIAL PRIMARY KEY,
-        user_id BIGINT NOT NULL,
-        role TEXT NOT NULL,
-        content TEXT NOT NULL,
-        task TEXT NOT NULL DEFAULT 'chat',
-        embedding ${hasVectorExtension ? "vector(1536)" : "TEXT"},
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
-      );
-    `);
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS ai_memory_user_created_at_idx
-      ON ai_memory (user_id, created_at);
-    `);
-    if (hasVectorExtension) {
-      try {
-        await client.query(`
-          CREATE INDEX IF NOT EXISTS ai_memory_embedding_idx
-          ON ai_memory USING hnsw (embedding vector_cosine_ops);
-        `);
-      } catch (err) {
-        logger.warn({ err }, "Could not create pgvector similarity index");
-      }
-    }
-
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS bot_reminders (
-        id SERIAL PRIMARY KEY,
-        user_id BIGINT NOT NULL,
-        label TEXT NOT NULL,
-        fire_at TIMESTAMP NOT NULL,
-        sent_at TIMESTAMP,
-        created_at TIMESTAMP NOT NULL DEFAULT NOW()
-      );
-    `);
-    await client.query(`
-      CREATE INDEX IF NOT EXISTS bot_reminders_due_idx
-      ON bot_reminders (fire_at)
-      WHERE sent_at IS NULL;
-    `);
-
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS bot_sessions (
-        key TEXT PRIMARY KEY,
-        data JSONB NOT NULL DEFAULT '{}'::jsonb,
-        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
-      );
-    `);
-
-    await client.query(`
       CREATE TABLE IF NOT EXISTS user_activity_alerts (
         user_id BIGINT PRIMARY KEY,
         last_seen_at TIMESTAMP NOT NULL DEFAULT NOW(),
@@ -235,6 +124,16 @@ export async function runMigrations(): Promise<void> {
         email TEXT,
         connected_at TIMESTAMP NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS feature_daily_usage (
+        user_id BIGINT NOT NULL,
+        feature TEXT NOT NULL,
+        day TEXT NOT NULL,
+        used INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (user_id, feature, day)
       );
     `);
 
