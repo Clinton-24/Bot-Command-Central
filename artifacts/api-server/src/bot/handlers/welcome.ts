@@ -101,12 +101,12 @@ export function registerWelcomeHandler(bot: MyBot): void {
       isNew = status === "created";
     }
 
+    // Welcome only — main menu is opened via button or /menu
     const name = displayName(from);
     await ctx.reply(growthWelcomeText(name, isNew, owner), {
       parse_mode: "Markdown",
       reply_markup: growthWelcomeKeyboard(owner),
     });
-    await sendMainMenu(ctx);
   });
 
   bot.command("invite", async (ctx) => {
