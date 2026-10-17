@@ -2,6 +2,7 @@
  * SUBSCRIPTION & TIER SYSTEM
  * Free — auto on /start; bank logs + AI 10/day + card tools 4/day
  * Premium / VIP — full shop categories + higher limits
+ * Owner — unlimited, no upgrade UI
  */
 
 import { InlineKeyboard } from "grammy";
@@ -48,7 +49,7 @@ export const PREMIUM_AI_LIMIT = 100;
 export const VIP_AI_LIMIT = 200;
 
 export async function getTierAILimit(userId: number): Promise<number> {
-  if (isOwner(userId)) return 999;
+  if (isOwner(userId)) return Number.POSITIVE_INFINITY;
   const rec = await getAccess(userId);
   if (!rec || !rec.isApproved) return 0;
   if (rec.tier === "vip") return VIP_AI_LIMIT;
@@ -100,7 +101,10 @@ async function getPaymentAddresses(): Promise<{
   }
 }
 
-function subscriptionKeyboard(currentTier: string): InlineKeyboard {
+function subscriptionKeyboard(currentTier: string, asOwner: boolean): InlineKeyboard {
+  if (asOwner) {
+    return new InlineKeyboard().text("🏠 Main Menu", "menu:main");
+  }
   const kb = new InlineKeyboard();
   if (currentTier !== "premium") {
     kb.text("💎 Upgrade to Premium — $20/mo", "sub:buy:premium").row();
@@ -118,24 +122,40 @@ function subscriptionKeyboard(currentTier: string): InlineKeyboard {
 export function registerSubscriptionHandlers(bot: MyBot): void {
   bot.command("plans", async (ctx) => {
     if (!ctx.from) return;
+    if (isOwner(ctx.from.id)) {
+      await showSubscriptionPanel(ctx, "owner", true);
+      return;
+    }
     const rec = await getAccess(ctx.from.id).catch(() => null);
-    await showSubscriptionPanel(ctx, rec?.tier ?? "free");
+    await showSubscriptionPanel(ctx, rec?.tier ?? "free", false);
   });
 
   bot.command("subscribe", async (ctx) => {
     if (!ctx.from) return;
+    if (isOwner(ctx.from.id)) {
+      await showSubscriptionPanel(ctx, "owner", true);
+      return;
+    }
     const rec = await getAccess(ctx.from.id).catch(() => null);
-    await showSubscriptionPanel(ctx, rec?.tier ?? "free");
+    await showSubscriptionPanel(ctx, rec?.tier ?? "free", false);
   });
 
   bot.callbackQuery("sub:panel", async (ctx) => {
     await ctx.answerCallbackQuery();
+    if (isOwner(ctx.from!.id)) {
+      await showSubscriptionPanel(ctx, "owner", true);
+      return;
+    }
     const rec = await getAccess(ctx.from!.id).catch(() => null);
-    await showSubscriptionPanel(ctx, rec?.tier ?? "free");
+    await showSubscriptionPanel(ctx, rec?.tier ?? "free", false);
   });
 
   bot.callbackQuery(/^sub:buy:(premium|vip)$/, async (ctx) => {
     await ctx.answerCallbackQuery();
+    if (isOwner(ctx.from!.id)) {
+      await ctx.reply("👑 You are the owner — unlimited access. No upgrade needed.");
+      return;
+    }
     const targetTier = ctx.match![1] as "premium" | "vip";
     const emoji = TIER_EMOJI[targetTier] ?? "";
     const label = TIER_LABEL[targetTier] ?? targetTier;
@@ -167,6 +187,7 @@ export function registerSubscriptionHandlers(bot: MyBot): void {
 
   bot.callbackQuery(/^sub:paid:(premium|vip)$/, async (ctx) => {
     await ctx.answerCallbackQuery("Notifying owner…");
+    if (isOwner(ctx.from!.id)) return;
     const targetTier = ctx.match![1] as "premium" | "vip";
     const userId = ctx.from!.id;
     const emoji = TIER_EMOJI[targetTier] ?? "";
@@ -265,6 +286,10 @@ export function registerSubscriptionHandlers(bot: MyBot): void {
 
   bot.callbackQuery("sub:stay_free", async (ctx) => {
     await ctx.answerCallbackQuery();
+    if (isOwner(ctx.from!.id)) {
+      await showSubscriptionPanel(ctx, "owner", true);
+      return;
+    }
     await ctx.editMessageText(
       [
         "🟢 FREE TIER",
@@ -286,7 +311,35 @@ export function registerSubscriptionHandlers(bot: MyBot): void {
   });
 }
 
-async function showSubscriptionPanel(ctx: BotContext, currentTier: string): Promise<void> {
+async function showSubscriptionPanel(
+  ctx: BotContext,
+  currentTier: string,
+  asOwner = false,
+): Promise<void> {
+  if (asOwner || currentTier === "owner") {
+    const text = [
+      "👑 OWNER",
+      "━━━━━━━━━━━━━━━━━━",
+      "",
+      "You are the bot owner.",
+      "Tier: Unlimited (not Free / Premium / VIP)",
+      "",
+      "• Crescent AI — unlimited",
+      "• Card Tools — unlimited",
+      "• Full shop + Hex panel",
+      "• No upgrade required",
+    ].join("\n");
+    const kb = subscriptionKeyboard("owner", true);
+    if (ctx.callbackQuery) {
+      await ctx.editMessageText(text, { reply_markup: kb }).catch(() =>
+        ctx.reply(text, { reply_markup: kb }),
+      );
+    } else {
+      await ctx.reply(text, { reply_markup: kb });
+    }
+    return;
+  }
+
   const emoji = TIER_EMOJI[currentTier] ?? "🟢";
   const label = TIER_LABEL[currentTier] ?? currentTier;
   const features = TIER_FEATURES[currentTier] ?? [];
@@ -305,7 +358,7 @@ async function showSubscriptionPanel(ctx: BotContext, currentTier: string): Prom
     "👑 VIP — $10/mo",
   ].join("\n");
 
-  const kb = subscriptionKeyboard(currentTier);
+  const kb = subscriptionKeyboard(currentTier, false);
 
   if (ctx.callbackQuery) {
     await ctx.editMessageText(text, { reply_markup: kb }).catch(() =>
