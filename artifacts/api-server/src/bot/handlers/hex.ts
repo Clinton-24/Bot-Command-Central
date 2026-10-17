@@ -38,6 +38,16 @@ const TOR_DELIVERY: Record<string, { name: string; about: string; finds: string;
   nytimes: { name: "The New York Times (Onion)", about: "NYT official onion mirror.", finds: "Full NYT journalism over Tor.", onion: "https://www.nytimes3xbfgragh.onion" },
   bbc: { name: "BBC News (Onion)", about: "BBC official onion for censored regions.", finds: "BBC news coverage over Tor.", onion: "https://www.bbcnewsd73hkzno2ini43a6qrcunjqz37yvnpkb6qazsykquxpd5tlq.onion" },
   facebook: { name: "Facebook / Meta (Onion)", about: "Meta official Facebook onion.", finds: "Facebook login over Tor.", onion: "https://www.facebookwkhpilnemxj7asaniu7vnjjbiltxjqhye3mhbshg7kx5tfayd.onion" },
+  propublica: { name: "ProPublica (Onion)", about: "Investigative journalism onion mirror.", finds: "Investigations and news over Tor.", onion: "https://www.propub3r6espa33w.onion" },
+  cia: { name: "CIA.gov (Onion)", about: "CIA public site on Tor.", finds: "Public CIA.gov content over Tor.", onion: "http://ciadotgov4sjwlzihbbgxnqg3xiyrg7so2r2o3lt5ceclq3qzt6gdaqd.onion" },
+  riseup: { name: "Riseup (Onion)", about: "Activist email/lists/VPN provider.", finds: "Riseup services over Tor.", onion: "http://vww6ybal4bd7szmgncyruucpgfkqahzddi37ktceo3ah7ngmcopnpyyd.onion" },
+  debian: { name: "Debian (Onion)", about: "Debian Project onion services.", finds: "Docs and package info over Tor.", onion: "http://5emwn4bxbrgkh6wqbthnkkmvsm5v256wtzlxupreztudshqu67ixn4qd.onion" },
+  keybase: { name: "Keybase (Onion)", about: "Identity and encrypted chat.", finds: "Keybase over Tor.", onion: "http://keybase5wmilwokqirssclfnsqrjdsi7jdir5wy7y7iu3tanwdbfzoid.onion" },
+  cryptostorm: { name: "Cryptostorm VPN (Onion)", about: "Privacy VPN provider onion site.", finds: "VPN account and config docs.", onion: "http://stormwayszuh4jrt745bbigxiqvdpzllj7f3dxkjc3ew3mgmtedvmgsd.onion" },
+  dw: { name: "Deutsche Welle (Onion)", about: "DW international news onion.", finds: "World news in multiple languages.", onion: "https://www.dwnewsgngmhlplxy6o2twt2ktxwjt7dyt4w4r7jmwj5xjnq.onion" },
+  securesdrop_guardian: { name: "Guardian SecureDrop", about: "Guardian whistleblower drop.", finds: "Anonymous tips to journalists.", onion: "http://theguardian2d2mn.onion" },
+  qubes: { name: "Qubes OS (Onion)", about: "Qubes OS project site.", finds: "Downloads and docs for Qubes.", onion: "http://qubesosfasa4zl54gj5gf5fjh3h5t6f2j4yq.onion" },
+  archive_today: { name: "Archive.today (Onion)", about: "Page archive service.", finds: "Save and view web snapshots.", onion: "http://archiveiya74codqgiixo33q62qlrqtkgmcitqx5u2oeqnmn5bpcbiyd.onion" },
 };
 
 function catEmoji(cat: string): string {
