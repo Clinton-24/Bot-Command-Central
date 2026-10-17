@@ -42,54 +42,50 @@ export async function sendMainMenu(ctx: BotContext): Promise<void> {
   const userId = ctx.from?.id;
 
   if (userId && !isOwner(userId)) {
+    // Auto-grant free tier — no owner pending queue for normal use
+    const { ensureAutoFreeAccess } = await import("./growth");
+    await ensureAutoFreeAccess({
+      id: userId,
+      username: ctx.from?.username,
+      firstName: ctx.from?.first_name,
+    }).catch(() => {});
+
     const { getAccess } = await import("./access");
     const access = await getAccess(userId).catch(() => null);
 
-    if (!access || (!access.isApproved && !access.isPending)) {
-      const name = ctx.from?.username
-        ? `@${ctx.from.username}`
-        : (ctx.from?.first_name ?? "User");
-      const gateText =
-        `🌙 *Crescent*\n━━━━━━━━━━━━━━━━━━\n\n` +
-        `Hey ${name}\n` +
-        `Welcome to *God of Credentials* bot.\n\n` +
-        `🟢 Free access: send /start to auto-unlock.\n` +
-        `Or use a referral link / invite code.\n\n` +
-        `💳 *Premium / VIP* — higher shop limits.`;
-      const gateKb = new InlineKeyboard()
-        .text("🔄 Unlock free access", "growth:try_crescent")
-        .row()
-        .text("🎟️ Enter referral / code", "access:invite")
-        .row()
-        .text("💳 Buy Premium / VIP", "access:plans")
-        .row()
-        .text("🔑 Ask owner", "access:request");
+    if (access?.tier === "blocked") {
+      const blocked =
+        `🚫 Access Denied\n━━━━━━━━━━━━━━━━━━\n\nYour account is blocked.` +
+        (access.blockedReason ? `\nReason: ${access.blockedReason}` : "");
       if (ctx.callbackQuery) {
-        try {
-          await ctx.answerCallbackQuery();
-        } catch {
-          /* already answered */
-        }
-        await ctx.editMessageText(gateText, { parse_mode: "Markdown", reply_markup: gateKb });
+        try { await ctx.answerCallbackQuery(); } catch { /* */ }
+        await ctx.editMessageText(blocked).catch(() => ctx.reply(blocked));
       } else {
-        await ctx.reply(gateText, { parse_mode: "Markdown", reply_markup: gateKb });
+        await ctx.reply(blocked);
       }
       return;
     }
 
-    if (!access.isApproved && access.isPending) {
-      const pendingText =
-        `⏳ *Pending Approval*\n━━━━━━━━━━━━━━━━━━\n\nYour request is being reviewed.\n_You'll be notified once approved._\n\nOr buy access now:`;
-      const pendingKb = new InlineKeyboard().text("💳 Buy Premium / VIP", "access:plans");
+    if (!access?.isApproved) {
+      const name = ctx.from?.username
+        ? `@${ctx.from.username}`
+        : (ctx.from?.first_name ?? "User");
+      const gateText =
+        `🌙 Crescent\n━━━━━━━━━━━━━━━━━━\n\n` +
+        `Hey ${name}\nWelcome to God of Credentials.\n\n` +
+        `Tap Unlock free access (or /start) to continue.\n` +
+        `Upgrade anytime for full shop + higher AI/card limits.`;
+      const gateKb = new InlineKeyboard()
+        .text("🔄 Unlock free access", "growth:try_crescent")
+        .row()
+        .text("💳 Premium / VIP", "access:plans");
       if (ctx.callbackQuery) {
-        try {
-          await ctx.answerCallbackQuery();
-        } catch {
-          /* */
-        }
-        await ctx.editMessageText(pendingText, { parse_mode: "Markdown", reply_markup: pendingKb });
+        try { await ctx.answerCallbackQuery(); } catch { /* */ }
+        await ctx.editMessageText(gateText, { reply_markup: gateKb }).catch(() =>
+          ctx.reply(gateText, { reply_markup: gateKb }),
+        );
       } else {
-        await ctx.reply(pendingText, { parse_mode: "Markdown", reply_markup: pendingKb });
+        await ctx.reply(gateText, { reply_markup: gateKb });
       }
       return;
     }
@@ -106,20 +102,14 @@ export async function sendMainMenu(ctx: BotContext): Promise<void> {
     } catch {
       /* */
     }
-    await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: kb });
+    try {
+      await ctx.editMessageText(text, { parse_mode: "Markdown", reply_markup: kb });
+    } catch {
+      await ctx.reply(text, { parse_mode: "Markdown", reply_markup: kb });
+    }
   } else {
     await ctx.reply(text, { parse_mode: "Markdown", reply_markup: kb });
   }
-}
-
-export function shopMenuKeyboard(): InlineKeyboard {
-  return new InlineKeyboard()
-    .text("📦 Browse Products", "shop:browse")
-    .row()
-    .text("📋 My Orders", "shop:orders")
-    .text("❌ Cancel Order", "shop:cancel")
-    .row()
-    .text("🔙 Main Menu", "menu:main");
 }
 
 export function cardShopRedirectKeyboard(): InlineKeyboard {
@@ -216,6 +206,7 @@ export function registerMenuHandlers(bot: MyBot): void {
         await processMeetingInput(ctx, detail, text);
       } else if (category === "hexagon") {
         if (detail === "email") await draftEmail(ctx, text);
+        else await handleHexagonMessage(ctx, text);
       } else if (pending.startsWith("hex:")) {
         ctx.session.pendingAction = pending;
         await processHexInput(ctx, pending, text);
@@ -255,7 +246,7 @@ export function registerMenuHandlers(bot: MyBot): void {
       /* */
     }
     await ctx.editMessageText(
-      `💳 *CARD TOOLS*\n━━━━━━━━━━━━━━━━━━\n\nFree card utilities and BIN lookup.`,
+      `💳 *CARD TOOLS*\n━━━━━━━━━━━━━━━━━━\n\nFree: 4 uses/day · Premium: 50 · VIP: 999`,
       { parse_mode: "Markdown", reply_markup: cardMenuKeyboard() },
     );
   });
