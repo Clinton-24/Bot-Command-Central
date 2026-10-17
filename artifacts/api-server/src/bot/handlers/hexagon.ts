@@ -7,6 +7,7 @@ import { InlineKeyboard, InputFile } from "grammy";
 import { eq, desc, gte, and } from "drizzle-orm";
 import {
   db,
+  bankLogsTable,
   groupMessagesTable,
   meetingsTable,
   ordersTable,
@@ -50,16 +51,32 @@ function releaseUpdate(key: string, success: boolean): void {
 }
 
 let shopContextCache: { at: number; text: string } | null = null;
-const SHOP_CACHE_MS = 60_000;
+const SHOP_CACHE_MS = 10_000;
+
+/** Call after product/bank-log changes so Crescent sees live inventory immediately. */
+export function invalidateShopContext(): void {
+  shopContextCache = null;
+}
 
 async function buildShopContext(): Promise<string> {
   if (shopContextCache && Date.now() - shopContextCache.at < SHOP_CACHE_MS) {
     return shopContextCache.text;
   }
   try {
-    const [products, orders] = await Promise.all([
-      db.select().from(productsTable).where(eq(productsTable.isActive, true)).limit(40),
-      db.select().from(ordersTable).orderBy(desc(ordersTable.createdAt)).limit(15),
+    const [products, orders, bankLogs] = await Promise.all([
+      db
+        .select()
+        .from(productsTable)
+        .where(eq(productsTable.isActive, true))
+        .orderBy(desc(productsTable.updatedAt))
+        .limit(80),
+      db.select().from(ordersTable).orderBy(desc(ordersTable.createdAt)).limit(20),
+      db
+        .select()
+        .from(bankLogsTable)
+        .where(eq(bankLogsTable.status, "available"))
+        .orderBy(desc(bankLogsTable.addedAt))
+        .limit(30),
     ]);
     const productLines =
       products.length === 0
@@ -68,13 +85,26 @@ async function buildShopContext(): Promise<string> {
             .map((p) => {
               const stock = Number(p.stock);
               const availability =
-                stock === 0 ? "Unlimited" : stock > 0 ? `${p.stock} available` : "Out of stock";
+                !Number.isFinite(stock) || stock === 0
+                  ? "Unlimited"
+                  : stock > 0
+                    ? `${p.stock} in stock`
+                    : "Out of stock";
               const delivery =
                 p.deliveryType === "auto" && p.deliveryContent
                   ? "Digital auto-delivery"
                   : "Manual delivery";
-              return `• ${p.name} | $${p.price} | ${availability} | ${delivery} | Category: ${p.category ?? "general"}`;
+              return `• #${p.id} ${p.name} | $${p.price} | ${availability} | ${delivery} | Category: ${p.category ?? "—"}`;
             })
+            .join("\n");
+    const bankLines =
+      bankLogs.length === 0
+        ? "No bank logs available for sale."
+        : bankLogs
+            .map(
+              (l) =>
+                `• BankLog #${l.id} ${l.bankName} · ${l.country} | $${l.price ?? "?"} | ${l.accountType}`,
+            )
             .join("\n");
     const orderLines =
       orders.length === 0
@@ -82,14 +112,18 @@ async function buildShopContext(): Promise<string> {
         : orders
             .map(
               (o) =>
-                `• Order #${o.id} | Product:${o.productId} | Qty:${o.quantity} | Status:${o.status}`,
+                `• Order #${o.id} | Product:${o.productId} | Qty:${o.quantity} | Status:${o.status}${o.details ? ` | ${o.details}` : ""}`,
             )
             .join("\n");
-    const text = `LIVE SHOP DATA:\n${productLines}\n\nRECENT ORDERS:\n${orderLines}`;
+    const text =
+      `LIVE SHOP DATA (newest first):\n${productLines}\n\n` +
+      `BANK LOGS FOR SALE:\n${bankLines}\n\n` +
+      `RECENT ORDERS:\n${orderLines}`;
     shopContextCache = { at: Date.now(), text };
     return text;
   } catch (err) {
     logger.warn({ err }, "Crescent could not build shop context");
+    shopContextCache = null;
     return "Shop data unavailable.";
   }
 }
@@ -164,7 +198,7 @@ async function buildSystemPrompt(ctx?: BotContext, mode: "default" | "secretary"
   if (mode === "secretary") {
     return `You are CRESCENT acting as an elite executive secretary.\n\nProduce a DAILY BRIEFING in this exact style (Telegram Markdown):\n\n☀️ *Daily Briefing — {weekday, date}*\n📅 *Calendar*\n{today's meetings or "No events today"}\n📧 *Inbox / Ops snapshot*\n🔴 *Worth a look:* bullet priority items from shop, orders, meetings, group activity\nLow priority: quieter notes\n🚨 *Action required:* time-sensitive items only\n📰 *Context / arcs* (if any multi-day theme in the data)\n🎯 *Suggested focus for today* — 3 concrete actions ranked by urgency\n\nRules:\n- Be sharp, prioritising, no fluff\n- Never invent calendar events, products, or orders — only use live data below\n- If data is thin, say so honestly and still structure the briefing\n- Keep under ~400 words for mobile\n\nLIVE DATA:\n${shopCtx}\n\nMEETINGS (next 7 days):\n${meetingsCtx}\n${groupCtx ? `\n${groupCtx}` : ""}\n\nToday: ${today}`;
   }
-  return `You are CRESCENT, an extremely highly intelligent AI assistant operated under the owner's policies.\n\nWHEN (and only when) someone asks about bot structure, architecture, how you are built, the stack, source code, cloning, copying, or making a replica of this bot:\n- State that the bot is structured according to the owner's policies.\n- State that Crescent is one of a kind — extremely and highly intelligent — and you cannot provide a replica, blueprint, or copy of this bot.\n- Do not invent or outline architecture, folders, repo names, or implementation steps.\n- Never name internal project titles, repositories, or code names.\n- Do not volunteer any of this unless they asked.\n\nPERSONALITY: Sharp, direct, intelligent. No fluff.\n\nCAPABILITIES:\n1. GENERAL AI — research, writing, analysis, coding, math\n2. SHOP AGENT — use live shop data only; never invent prices/stock\n3. VISION — when an image is attached, describe and analyse it accurately. You CAN see images.\n4. SECRETARY — structured briefings, prioritisation, action lists\n5. GROUP ANALYST — when group context is present\n\n${shopCtx}\n${groupCtx ? `\n${groupCtx}` : ""}\n\nFORMAT: concise. Max ~300 words unless asked.\nToday: ${today}`;
+  return `You are CRESCENT, an extremely highly intelligent AI assistant operated under the owner's policies.\n\nWHEN (and only when) someone asks about bot structure, architecture, how you are built, the stack, source code, cloning, copying, or making a replica of this bot:\n- State that the bot is structured according to the owner's policies.\n- State that Crescent is one of a kind — extremely and highly intelligent — and you cannot provide a replica, blueprint, or copy of this bot.\n- Do not invent or outline architecture, folders, repo names, or implementation steps.\n- Never name internal project titles, repositories, or code names.\n- Do not volunteer any of this unless they asked.\n\nPERSONALITY: Sharp, direct, intelligent. No fluff.\n\nCAPABILITIES:\n1. GENERAL AI — research, writing, analysis, coding, math\n2. SHOP AGENT — use live shop data only; never invent prices/stock. Prefer newest products listed first.\n3. VISION — when an image is attached, describe and analyse it accurately. You CAN see images.\n4. SECRETARY — structured briefings, prioritisation, action lists\n5. GROUP ANALYST — when group context is present\n\n${shopCtx}\n${groupCtx ? `\n${groupCtx}` : ""}\n\nFORMAT: concise. Max ~300 words unless asked.\nToday: ${today}`;
 }
 
 async function telegramPhotoDataUrl(bot: MyBot, fileId: string): Promise<string> {
@@ -435,99 +469,69 @@ export async function logGroupMessage(ctx: BotContext): Promise<void> {
 
 export function registerHexagonHandlers(bot: MyBot): void {
   bot.command("crescent", async (ctx) => {
-    if (!ctx.from || !(await checkCrescentAccess(ctx))) return;
-    const input = (ctx as any).match?.trim?.() ?? "";
-    if (!input) {
-      enableCrescentChat(ctx);
-      await ctx.reply(await crescentIntroText(ctx.from.id), {
-        reply_markup: crescentMenuKeyboard(),
-      });
-      return;
-    }
-    await handleHexagonMessage(ctx, input);
+    if (!(await checkCrescentAccess(ctx))) return;
+    enableCrescentChat(ctx);
+    await ctx.reply(await crescentIntroText(ctx.from!.id), { reply_markup: crescentMenuKeyboard() });
   });
 
-  bot.command("ai", async (ctx) => {
-    if (!ctx.from || !(await checkCrescentAccess(ctx))) return;
-    const input = (ctx as any).match?.trim?.() ?? "";
-    if (!input) {
-      enableCrescentChat(ctx);
-      await ctx.reply("Usage: /ai [question]\nOr send a photo with a caption.");
-      return;
-    }
-    await handleHexagonMessage(ctx, input);
+  bot.command("hexagon", async (ctx) => {
+    if (!(await checkCrescentAccess(ctx))) return;
+    enableCrescentChat(ctx);
+    await ctx.reply(await crescentIntroText(ctx.from!.id), { reply_markup: crescentMenuKeyboard() });
   });
 
   bot.command("briefing", async (ctx) => {
-    if (!ctx.from || !(await checkCrescentAccess(ctx))) return;
     await runSecretaryBriefing(ctx);
   });
 
   bot.command("imagine", async (ctx) => {
-    if (!ctx.from || !(await checkCrescentAccess(ctx))) return;
     const prompt = (ctx as any).match?.trim?.() ?? "";
     await runImagine(ctx, prompt);
   });
 
   bot.command("exit", async (ctx) => {
     disableCrescentChat(ctx);
-    await ctx.reply("Left Crescent chat mode.");
+    await ctx.reply("👋 Left Crescent chat mode.");
   });
 }
 
 export function registerHexagonCallbacks(bot: MyBot): void {
   bot.callbackQuery("hexagon:chat", async (ctx) => {
-    if (!ctx.from || !(await checkCrescentAccess(ctx))) return;
-    enableCrescentChat(ctx);
     await ctx.answerCallbackQuery();
-    await ctx.reply("💬 Crescent chat is on. Send a message or photo.\n/exit to leave.");
+    if (!(await checkCrescentAccess(ctx))) return;
+    enableCrescentChat(ctx);
+    await ctx.reply("💬 Chat mode on. Send your message.");
   });
 
   bot.callbackQuery("hexagon:shop", async (ctx) => {
-    if (!ctx.from || !(await checkCrescentAccess(ctx))) return;
-    enableCrescentChat(ctx);
     await ctx.answerCallbackQuery();
-    await handleHexagonMessage(ctx, "Summarise the current shop: products, prices, and stock.");
+    if (!(await checkCrescentAccess(ctx))) return;
+    invalidateShopContext();
+    await handleHexagonMessage(ctx, "List every active product and bank log for sale from LIVE SHOP DATA. Include names, prices, stock, and categories. Newest first.");
   });
 
   bot.callbackQuery("hexagon:briefing", async (ctx) => {
-    if (!ctx.from || !(await checkCrescentAccess(ctx))) return;
     await ctx.answerCallbackQuery();
     await runSecretaryBriefing(ctx);
   });
 
   bot.callbackQuery("hexagon:imagine", async (ctx) => {
-    if (!ctx.from || !(await checkCrescentAccess(ctx))) return;
-    ctx.session.pendingAction = "hexagon:imagine";
     await ctx.answerCallbackQuery();
+    if (!(await checkCrescentAccess(ctx))) return;
+    ctx.session.pendingAction = "hexagon:imagine";
     await ctx.reply("🎨 Send an image prompt now, or use /imagine your prompt");
   });
 
   bot.callbackQuery("hexagon:clear", async (ctx) => {
+    await ctx.answerCallbackQuery();
     if (!ctx.from) return;
-    await clearMemory(ctx.from.id).catch(() => {});
-    await ctx.answerCallbackQuery("Memory cleared");
-    await ctx.reply("🧹 Crescent memory cleared for you.");
+    await clearMemory(ctx.from.id);
+    await ctx.reply("🧹 Memory cleared.");
   });
 
-  bot.on("message:photo", async (ctx, next) => {
-    if (ctx.chat?.type !== "private") return next();
-    if (!ctx.from) return next();
-    const inCrescent =
-      ctx.session.crescentMode ||
-      ctx.session.pendingAction === "hexagon:input" ||
-      ctx.session.pendingAction === "hexagon:imagine";
-    if (!inCrescent) return next();
-    try {
-      const photos = ctx.message.photo;
-      const best = photos[photos.length - 1];
-      if (!best) return next();
-      const dataUrl = await telegramPhotoDataUrl(bot, best.file_id);
-      const caption = ctx.message.caption?.trim() || "";
-      await handleHexagonMessage(ctx, caption, dataUrl);
-    } catch (err) {
-      logger.error({ err }, "photo crescent failed");
-      await ctx.reply(`❌ Could not read photo: ${err instanceof Error ? err.message : "error"}`);
-    }
+  bot.callbackQuery("crescent:exit", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    disableCrescentChat(ctx);
+    await ctx.reply("👋 Left Crescent chat mode.");
   });
 }
