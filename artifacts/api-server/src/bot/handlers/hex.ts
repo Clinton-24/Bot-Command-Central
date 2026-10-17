@@ -12,6 +12,7 @@ import type { Bot } from "grammy";
 import type { BotContext } from "../context";
 import { isOwner } from "../helpers";
 import { deductProductStock, getConfirmedRevenue, stockLabel as stockLabelShared, isUnlimitedStock } from "../../lib/order-fulfill";
+import { invalidateShopContext } from "./hexagon";
 
 const CATEGORIES: { id: string; label: string }[] = [
   { id: "streaming", label: "📺 Streaming" },
@@ -148,6 +149,7 @@ async function saveNewProduct(ctx: BotContext): Promise<void> {
   }).returning();
   ctx.session.hexDraft = {};
   ctx.session.pendingAction = undefined;
+  invalidateShopContext();
   const pid = product?.id;
   await ctx.reply(
     `✅ Product added\n\n${draft.name}\n$${parseFloat(String(draft.price)).toFixed(2)}\nID: ${pid}`,
@@ -199,6 +201,7 @@ export async function processHexInput(ctx: BotContext, action: string, text: str
       const id = ctx.session.hexDraft?.editId ?? ctx.session.hexEditId;
       if (!id) return;
       await db.update(productsTable).set({ name: text.trim(), updatedAt: new Date() }).where(eq(productsTable.id, id));
+      invalidateShopContext();
       ctx.session.pendingAction = undefined;
       await ctx.reply("✅ Name updated.", { reply_markup: new InlineKeyboard().text("🔙 View", `hex:pview:${id}`) });
       break;
@@ -209,6 +212,7 @@ export async function processHexInput(ctx: BotContext, action: string, text: str
       const price = parseFloat(text.replace(/[^0-9.]/g, ""));
       if (!Number.isFinite(price) || price <= 0) { ctx.session.pendingAction = "hex:edit_price"; await ctx.reply("Invalid price:"); return; }
       await db.update(productsTable).set({ price: price.toFixed(2), updatedAt: new Date() }).where(eq(productsTable.id, id));
+      invalidateShopContext();
       ctx.session.pendingAction = undefined;
       await ctx.reply("✅ Price updated.", { reply_markup: new InlineKeyboard().text("🔙 View", `hex:pview:${id}`) });
       break;
@@ -217,6 +221,7 @@ export async function processHexInput(ctx: BotContext, action: string, text: str
       const id = ctx.session.hexDraft?.editId ?? ctx.session.hexEditId;
       if (!id) return;
       await db.update(productsTable).set({ description: text === "/skip" ? null : text.trim(), updatedAt: new Date() }).where(eq(productsTable.id, id));
+      invalidateShopContext();
       ctx.session.pendingAction = undefined;
       await ctx.reply("✅ Description updated.", { reply_markup: new InlineKeyboard().text("🔙 View", `hex:pview:${id}`) });
       break;
@@ -228,6 +233,7 @@ export async function processHexInput(ctx: BotContext, action: string, text: str
       let stockVal = (raw === "unlimited" || raw === "0" || raw === "inf") ? "0" : String(parseInt(raw.replace(/[^0-9]/g, ""), 10));
       if (stockVal === "NaN") { ctx.session.pendingAction = "hex:edit_stock"; await ctx.reply('Number or "unlimited":'); return; }
       await db.update(productsTable).set({ stock: stockVal, isActive: stockVal === "0" || Number(stockVal) > 0, updatedAt: new Date() }).where(eq(productsTable.id, id));
+      invalidateShopContext();
       ctx.session.pendingAction = undefined;
       await ctx.reply(`✅ Stock: ${stockVal === "0" ? "Unlimited" : stockVal}`, { reply_markup: new InlineKeyboard().text("🔙 View", `hex:pview:${id}`) });
       break;
@@ -310,6 +316,7 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
     const [p] = await db.select().from(productsTable).where(eq(productsTable.id, id));
     if (!p) return;
     await db.update(productsTable).set({ isActive: !p.isActive, updatedAt: new Date() }).where(eq(productsTable.id, id));
+    invalidateShopContext();
     await ctx.answerCallbackQuery(p.isActive ? "Disabled" : "Enabled");
     await showProductManage(ctx, id);
   });
@@ -318,6 +325,7 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
     if (!ctx.from || !isOwner(ctx.from.id)) { await ctx.answerCallbackQuery({ text: "Owner only", show_alert: true }); return; }
     const id = parseInt(ctx.match[1]!, 10);
     await db.update(productsTable).set({ isActive: false, updatedAt: new Date() }).where(eq(productsTable.id, id));
+    invalidateShopContext();
     await ctx.answerCallbackQuery("Disabled");
     await ctx.editMessageText("Product disabled.", { reply_markup: new InlineKeyboard().text("📦 Products", "hex:products") }).catch(() => {});
   });
@@ -370,6 +378,7 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
     const id = parseInt(ctx.match[1]!, 10);
     const cat = ctx.match[2]!;
     await db.update(productsTable).set({ category: cat, updatedAt: new Date() }).where(eq(productsTable.id, id));
+    invalidateShopContext();
     await ctx.answerCallbackQuery("Category set");
     await showProductManage(ctx, id);
   });
@@ -416,6 +425,7 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
     const torMatch = order.details?.match(/^TORLINK:(.+)$/);
     if (!bankMatch && !torMatch && order.productId > 0) {
       await deductProductStock(order.productId, order.quantity ?? 1);
+      invalidateShopContext();
     }
     let buyerMsg = `✅ Order #${id} confirmed`;
     if (bankMatch) {
@@ -423,6 +433,7 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
       const [log] = await db.select().from(bankLogsTable).where(eq(bankLogsTable.id, logId));
       if (log) {
         await db.update(bankLogsTable).set({ status: "sold", isSold: true, soldAt: new Date() }).where(eq(bankLogsTable.id, logId));
+        invalidateShopContext();
         buyerMsg += `\n\n🏦 ${log.bankName} · ${log.country}\n\n🎁 Delivery:\n` +
           (log.loginUrl ? `URL: ${log.loginUrl}\n` : "") +
           (log.username ? `User: ${log.username}\n` : "") +
