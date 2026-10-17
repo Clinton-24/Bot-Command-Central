@@ -25,6 +25,8 @@ export interface SessionData {
   crescentMode?: boolean;
   meetingDraft?: MeetingDraft;
   hexDraft?: HexDraft;
+  /** @deprecated use hexDraft.editId */
+  hexEditId?: number;
   disputeReply?: string;
   pendingBroadcast?: string;
 }
