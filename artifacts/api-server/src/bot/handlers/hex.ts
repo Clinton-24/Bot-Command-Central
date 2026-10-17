@@ -1,1 +1,1 @@
-PLACEHOLDER2
+{{FILE:/home/workdir/artifacts/hex.ts}}
