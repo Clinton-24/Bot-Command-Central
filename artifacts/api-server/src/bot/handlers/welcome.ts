@@ -73,10 +73,13 @@ export function registerWelcomeHandler(bot: MyBot): void {
     const owner = isOwner(from.id);
     const payload = (ctx.match as string | undefined)?.trim() ?? "";
 
-    // Invite code deep link (non-ref)
     if (payload && !payload.toLowerCase().startsWith("ref") && !owner) {
-      const handled = await handleInviteCode(bot, ctx, payload).catch(() => false);
-      if (handled) return;
+      try {
+        await handleInviteCode(bot, ctx, payload);
+        return;
+      } catch {
+        /* fall through to normal start */
+      }
     }
 
     const inviterId = parseReferralPayload(payload);
@@ -88,16 +91,18 @@ export function registerWelcomeHandler(bot: MyBot): void {
       );
     }
 
+    let isNew = false;
     if (!owner) {
-      await ensureAutoFreeAccess({
+      const status = await ensureAutoFreeAccess({
         id: from.id,
         username: from.username,
         firstName: from.first_name,
-      }).catch(() => {});
+      }).catch(() => "already" as const);
+      isNew = status === "created";
     }
 
     const name = displayName(from);
-    await ctx.reply(growthWelcomeText(name, owner), {
+    await ctx.reply(growthWelcomeText(name, isNew, owner), {
       parse_mode: "Markdown",
       reply_markup: growthWelcomeKeyboard(owner),
     });
@@ -110,7 +115,7 @@ export function registerWelcomeHandler(bot: MyBot): void {
     const link = referralLink(from.id);
     await ctx.reply(
       `🔗 Your invite link\n━━━━━━━━━━━━━━━━━━\n\n` +
-        `\`${link}\`\n\n` +
+        `${link}\n\n` +
         `• Friends get free access + Crescent AI\n` +
         `• You get +5 Crescent bonus per join\n` +
         `Unlimited invites.`,
@@ -129,7 +134,7 @@ export function registerWelcomeHandler(bot: MyBot): void {
     if (!from) return;
     const link = referralLink(from.id);
     await ctx.reply(
-      `🔗 Your invite link\n\n\`${link}\`\n\nFriends get free access. You get +5 Crescent bonus per join.`,
+      `🔗 Your invite link\n\n${link}\n\nFriends get free access. You get +5 Crescent bonus per join.`,
       {
         reply_markup: new InlineKeyboard()
           .url("Share", `https://t.me/share/url?url=${encodeURIComponent(link)}`)
