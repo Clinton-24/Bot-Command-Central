@@ -6,12 +6,10 @@ import {
   ordersTable,
   paymentSettingsTable,
   paymentRequestsTable,
-  accessTable,
 } from "@workspace/db";
 import type { Bot } from "grammy";
 import type { BotContext } from "../context";
 import { isOwner } from "../helpers";
-import { logger } from "../../lib/logger";
 
 const CATEGORIES: { id: string; label: string }[] = [
   { id: "general", label: "📦 General" },
@@ -62,6 +60,23 @@ function categoryKeyboard(): InlineKeyboard {
   return kb;
 }
 
+function categoryKeyboardForEdit(productId: number): InlineKeyboard {
+  const kb = new InlineKeyboard();
+  for (let i = 0; i < CATEGORIES.length; i += 2) {
+    const a = CATEGORIES[i]!;
+    const b = CATEGORIES[i + 1];
+    if (b) {
+      kb.text(a.label, `hex:applycat:${productId}:${a.id}`)
+        .text(b.label, `hex:applycat:${productId}:${b.id}`)
+        .row();
+    } else {
+      kb.text(a.label, `hex:applycat:${productId}:${a.id}`).row();
+    }
+  }
+  kb.text("🔙 Cancel", `hex:pview:${productId}`);
+  return kb;
+}
+
 function deliveryTypeKeyboard(): InlineKeyboard {
   return new InlineKeyboard()
     .text("✋ Manual (I'll deliver)", "hex:setdelivery:manual")
@@ -71,11 +86,44 @@ function deliveryTypeKeyboard(): InlineKeyboard {
     .text("❌ Cancel", "hex:products");
 }
 
-async function getOrCreatePaymentSettings(ownerId: number) {
-  const rows = await db.select().from(paymentSettingsTable).where(eq(paymentSettingsTable.ownerId, ownerId));
-  if (rows[0]) return rows[0];
-  const [created] = await db.insert(paymentSettingsTable).values({ ownerId }).returning();
-  return created!;
+function productManageKeyboard(id: number, isActive: boolean): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("✏️ Name", `hex:peditname:${id}`)
+    .text("💰 Price", `hex:peditprice:${id}`)
+    .row()
+    .text("📝 Desc", `hex:peditdesc:${id}`)
+    .text("📁 Category", `hex:peditcat:${id}`)
+    .row()
+    .text(isActive ? "⏸ Disable" : "▶️ Enable", `hex:ptoggle:${id}`)
+    .text("🗑 Delete", `hex:pdelete:${id}`)
+    .row()
+    .text("🔙 Products", "hex:products");
+}
+
+async function showProductManage(ctx: BotContext, id: number): Promise<void> {
+  const [p] = await db.select().from(productsTable).where(eq(productsTable.id, id));
+  if (!p) {
+    await ctx.reply("Product not found.", {
+      reply_markup: new InlineKeyboard().text("📦 Products", "hex:products"),
+    });
+    return;
+  }
+  const text =
+    `📦 PRODUCT #${p.id}\n━━━━━━━━━━━━━━━━━━\n\n` +
+    `Name: ${p.name}\n` +
+    `Price: $${parseFloat(String(p.price)).toFixed(2)}\n` +
+    `Category: ${p.category || "general"}\n` +
+    `Status: ${p.isActive ? "Active" : "Disabled"}\n` +
+    `Delivery: ${p.deliveryType || "manual"}\n` +
+    `Stock: ${p.stock}\n` +
+    (p.description ? `\nDescription:\n${p.description}\n` : "\nNo description.\n") +
+    `\nTap a button below to manage this product.`;
+  const kb = productManageKeyboard(id, p.isActive);
+  try {
+    await ctx.editMessageText(text, { reply_markup: kb });
+  } catch {
+    await ctx.reply(text, { reply_markup: kb });
+  }
 }
 
 async function saveNewProduct(ctx: BotContext): Promise<void> {
@@ -100,18 +148,19 @@ async function saveNewProduct(ctx: BotContext): Promise<void> {
   ctx.session.pendingAction = undefined;
 
   const emoji = catEmoji(draft.category ?? "general");
+  const pid = product?.id;
   await ctx.reply(
-    `✅ *Product Added!*\n━━━━━━━━━━━━━━━━━━\n\n` +
+    `✅ Product added\n━━━━━━━━━━━━━━━━━━\n\n` +
       `${emoji} ${draft.name}\n` +
       `💰 $${parseFloat(String(draft.price)).toFixed(2)}\n` +
       `📁 ${draft.category ?? "general"}\n` +
-      `🚚 ${draft.deliveryType === "auto" ? "⚡ Auto-delivery" : "✋ Manual"}\n\n` +
-      `Product ID: ${product?.id}\n\n` +
-      `_It appears under All Products and its category in CardShop._`,
+      `ID: ${pid}\n\n` +
+      `Tap Manage to edit it now.`,
     {
-      parse_mode: "Markdown",
       reply_markup: new InlineKeyboard()
+        .text("⚙️ Manage", `hex:pview:${pid}`)
         .text("📦 All Products", "hex:products")
+        .row()
         .text("➕ Add Another", "hex:product_add"),
     },
   );
@@ -129,19 +178,19 @@ export async function processHexInput(ctx: BotContext, action: string, text: str
       }
       ctx.session.hexDraft = { ...ctx.session.hexDraft, name: text.trim() };
       ctx.session.pendingAction = "hex:product_price";
-      await ctx.reply("💰 *Price?* (e.g. `15.00` USD):", { parse_mode: "Markdown" });
+      await ctx.reply("💰 Price? (e.g. 15.00 USD):");
       break;
 
     case "hex:product_price": {
       const price = parseFloat(text.replace(/[^0-9.]/g, ""));
       if (!Number.isFinite(price) || price <= 0) {
         ctx.session.pendingAction = "hex:product_price";
-        await ctx.reply("❌ Invalid price. Enter a number like `9.99`:");
+        await ctx.reply("❌ Invalid price. Enter a number like 9.99:");
         return;
       }
       ctx.session.hexDraft = { ...ctx.session.hexDraft, price: price.toFixed(2) };
       ctx.session.pendingAction = "hex:product_desc";
-      await ctx.reply("📝 *Description?* (type `/skip` to leave blank):", { parse_mode: "Markdown" });
+      await ctx.reply("📝 Description? (type /skip to leave blank):");
       break;
     }
 
@@ -151,10 +200,7 @@ export async function processHexInput(ctx: BotContext, action: string, text: str
         description: text === "/skip" || text.toLowerCase() === "skip" ? undefined : text.trim(),
       };
       ctx.session.pendingAction = undefined;
-      await ctx.reply("📁 *Choose category:*", {
-        parse_mode: "Markdown",
-        reply_markup: categoryKeyboard(),
-      });
+      await ctx.reply("📁 Choose category:", { reply_markup: categoryKeyboard() });
       break;
 
     case "hex:product_delivery_content":
@@ -168,11 +214,12 @@ export async function processHexInput(ctx: BotContext, action: string, text: str
       break;
 
     case "hex:edit_name": {
-      const id = ctx.session.hexEditId;
+      const id = ctx.session.hexDraft?.editId ?? ctx.session.hexEditId;
       if (!id) return;
       await db.update(productsTable).set({ name: text.trim(), updatedAt: new Date() }).where(eq(productsTable.id, id));
       ctx.session.pendingAction = undefined;
       ctx.session.hexEditId = undefined;
+      if (ctx.session.hexDraft) ctx.session.hexDraft.editId = undefined;
       await ctx.reply("✅ Name updated.", {
         reply_markup: new InlineKeyboard().text("🔙 View", `hex:pview:${id}`).text("📦 Products", "hex:products"),
       });
@@ -180,7 +227,7 @@ export async function processHexInput(ctx: BotContext, action: string, text: str
     }
 
     case "hex:edit_price": {
-      const id = ctx.session.hexEditId;
+      const id = ctx.session.hexDraft?.editId ?? ctx.session.hexEditId;
       if (!id) return;
       const price = parseFloat(text.replace(/[^0-9.]/g, ""));
       if (!Number.isFinite(price) || price <= 0) {
@@ -191,6 +238,7 @@ export async function processHexInput(ctx: BotContext, action: string, text: str
       await db.update(productsTable).set({ price: price.toFixed(2), updatedAt: new Date() }).where(eq(productsTable.id, id));
       ctx.session.pendingAction = undefined;
       ctx.session.hexEditId = undefined;
+      if (ctx.session.hexDraft) ctx.session.hexDraft.editId = undefined;
       await ctx.reply("✅ Price updated.", {
         reply_markup: new InlineKeyboard().text("🔙 View", `hex:pview:${id}`).text("📦 Products", "hex:products"),
       });
@@ -198,7 +246,7 @@ export async function processHexInput(ctx: BotContext, action: string, text: str
     }
 
     case "hex:edit_desc": {
-      const id = ctx.session.hexEditId;
+      const id = ctx.session.hexDraft?.editId ?? ctx.session.hexEditId;
       if (!id) return;
       await db
         .update(productsTable)
@@ -209,6 +257,7 @@ export async function processHexInput(ctx: BotContext, action: string, text: str
         .where(eq(productsTable.id, id));
       ctx.session.pendingAction = undefined;
       ctx.session.hexEditId = undefined;
+      if (ctx.session.hexDraft) ctx.session.hexDraft.editId = undefined;
       await ctx.reply("✅ Description updated.", {
         reply_markup: new InlineKeyboard().text("🔙 View", `hex:pview:${id}`).text("📦 Products", "hex:products"),
       });
@@ -226,8 +275,7 @@ export function registerHexHandlers(bot: Bot<BotContext>): void {
       await ctx.reply("⛔ Owner only.");
       return;
     }
-    await ctx.reply(`🔮 *HEX CONTROL PANEL*\n━━━━━━━━━━━━━━━━━━\n\nFull control over your CardShop.`, {
-      parse_mode: "Markdown",
+    await ctx.reply(`🔮 HEX CONTROL PANEL\n━━━━━━━━━━━━━━━━━━\n\nFull control over your CardShop.`, {
       reply_markup: hexPanelKeyboard(),
     });
   });
@@ -240,10 +288,15 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
       return;
     }
     await ctx.answerCallbackQuery();
-    await ctx.editMessageText(`🔮 *HEX CONTROL PANEL*\n━━━━━━━━━━━━━━━━━━\n\nFull control over your CardShop.`, {
-      parse_mode: "Markdown",
-      reply_markup: hexPanelKeyboard(),
-    });
+    try {
+      await ctx.editMessageText(`🔮 HEX CONTROL PANEL\n━━━━━━━━━━━━━━━━━━\n\nFull control over your CardShop.`, {
+        reply_markup: hexPanelKeyboard(),
+      });
+    } catch {
+      await ctx.reply(`🔮 HEX CONTROL PANEL\n━━━━━━━━━━━━━━━━━━\n\nFull control over your CardShop.`, {
+        reply_markup: hexPanelKeyboard(),
+      });
+    }
   });
 
   bot.callbackQuery("hex:products", async (ctx) => {
@@ -252,18 +305,23 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
       return;
     }
     await ctx.answerCallbackQuery();
-    const products = await db.select().from(productsTable).orderBy(desc(productsTable.createdAt)).limit(30);
+    const products = await db.select().from(productsTable).orderBy(desc(productsTable.createdAt)).limit(40);
     const kb = new InlineKeyboard();
     for (const p of products) {
       const flag = p.isActive ? "✅" : "⏸";
-      kb.text(`${flag} ${p.name} — $${parseFloat(String(p.price)).toFixed(2)}`, `hex:pview:${p.id}`).row();
+      kb.text(`${flag} #${p.id} ${p.name} — $${parseFloat(String(p.price)).toFixed(2)}`, `hex:pview:${p.id}`).row();
     }
     kb.text("➕ Add Product", "hex:product_add").row().text("🔙 Hex", "hex:main");
-    await ctx.editMessageText(
-      `📦 *PRODUCTS*\n━━━━━━━━━━━━━━━━━━\n\n` +
-        (products.length === 0 ? "No products yet. Add one!" : "Click a product to manage it."),
-      { parse_mode: "Markdown", reply_markup: kb },
-    );
+    const listText =
+      `📦 PRODUCTS\n━━━━━━━━━━━━━━━━━━\n\n` +
+      (products.length === 0
+        ? "No products yet. Add one!"
+        : "Tap a product to edit, disable, change category, or delete.");
+    try {
+      await ctx.editMessageText(listText, { reply_markup: kb });
+    } catch {
+      await ctx.reply(listText, { reply_markup: kb });
+    }
   });
 
   bot.callbackQuery("hex:product_add", async (ctx) => {
@@ -274,9 +332,7 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
     ctx.session.hexDraft = {};
     ctx.session.pendingAction = "hex:product_name";
     await ctx.answerCallbackQuery();
-    await ctx.reply(`➕ *ADD PRODUCT*\n━━━━━━━━━━━━━━━━━━\n\nStep 1/4: *Product name?*`, {
-      parse_mode: "Markdown",
-    });
+    await ctx.reply(`➕ ADD PRODUCT\n━━━━━━━━━━━━━━━━━━\n\nStep 1/4: Product name?`);
   });
 
   bot.callbackQuery(/^hex:setcat:(.+)$/, async (ctx) => {
@@ -287,10 +343,11 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
     const cat = ctx.match[1]!;
     ctx.session.hexDraft = { ...ctx.session.hexDraft, category: cat };
     await ctx.answerCallbackQuery();
-    await ctx.editMessageText("🚚 *Delivery type?*", {
-      parse_mode: "Markdown",
-      reply_markup: deliveryTypeKeyboard(),
-    });
+    try {
+      await ctx.editMessageText("🚚 Delivery type?", { reply_markup: deliveryTypeKeyboard() });
+    } catch {
+      await ctx.reply("🚚 Delivery type?", { reply_markup: deliveryTypeKeyboard() });
+    }
   });
 
   bot.callbackQuery(/^hex:setdelivery:(manual|auto)$/, async (ctx) => {
@@ -303,10 +360,13 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
     await ctx.answerCallbackQuery();
     if (dtype === "auto") {
       ctx.session.pendingAction = "hex:product_delivery_content";
-      await ctx.editMessageText(
-        `⚡ *Auto-delivery content*\n\nPaste the text/codes the buyer receives after payment:`,
-        { parse_mode: "Markdown" },
-      );
+      try {
+        await ctx.editMessageText(
+          `⚡ Auto-delivery content\n\nPaste the text/codes the buyer receives after payment:`,
+        );
+      } catch {
+        await ctx.reply(`⚡ Auto-delivery content\n\nPaste the text/codes the buyer receives after payment:`);
+      }
     } else {
       await saveNewProduct(ctx);
     }
@@ -318,31 +378,7 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
       return;
     }
     await ctx.answerCallbackQuery();
-    const id = parseInt(ctx.match[1]!);
-    const [p] = await db.select().from(productsTable).where(eq(productsTable.id, id));
-    if (!p) {
-      await ctx.editMessageText("Product not found.");
-      return;
-    }
-    const kb = new InlineKeyboard()
-      .text("✏️ Name", `hex:peditname:${id}`)
-      .text("💰 Price", `hex:peditprice:${id}`)
-      .row()
-      .text("📝 Desc", `hex:peditdesc:${id}`)
-      .text(p.isActive ? "⏸ Disable" : "▶️ Enable", `hex:ptoggle:${id}`)
-      .row()
-      .text("🗑 Delete", `hex:pdelete:${id}`)
-      .row()
-      .text("🔙 Products", "hex:products");
-    await ctx.editMessageText(
-      `📦 *${p.name}*\n━━━━━━━━━━━━━━━━━━\n\n` +
-        `💰 $${parseFloat(String(p.price)).toFixed(2)}\n` +
-        `📁 ${p.category}\n` +
-        `📊 ${p.isActive ? "Active" : "Disabled"}\n` +
-        `🚚 ${p.deliveryType}\n` +
-        (p.description ? `\n${p.description}` : ""),
-      { parse_mode: "Markdown", reply_markup: kb },
-    );
+    await showProductManage(ctx, parseInt(ctx.match[1]!, 10));
   });
 
   bot.callbackQuery(/^hex:ptoggle:(\d+)$/, async (ctx) => {
@@ -350,14 +386,12 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
       await ctx.answerCallbackQuery({ text: "Owner only", show_alert: true });
       return;
     }
-    const id = parseInt(ctx.match[1]!);
+    const id = parseInt(ctx.match[1]!, 10);
     const [p] = await db.select().from(productsTable).where(eq(productsTable.id, id));
     if (!p) return;
     await db.update(productsTable).set({ isActive: !p.isActive, updatedAt: new Date() }).where(eq(productsTable.id, id));
     await ctx.answerCallbackQuery(p.isActive ? "Disabled" : "Enabled");
-    await ctx.editMessageText(`Product ${p.isActive ? "disabled" : "enabled"}.`, {
-      reply_markup: new InlineKeyboard().text("🔙 View", `hex:pview:${id}`).text("📦 Products", "hex:products"),
-    });
+    await showProductManage(ctx, id);
   });
 
   bot.callbackQuery(/^hex:pdelete:(\d+)$/, async (ctx) => {
@@ -365,12 +399,16 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
       await ctx.answerCallbackQuery({ text: "Owner only", show_alert: true });
       return;
     }
-    const id = parseInt(ctx.match[1]!);
+    const id = parseInt(ctx.match[1]!, 10);
     await db.update(productsTable).set({ isActive: false, updatedAt: new Date() }).where(eq(productsTable.id, id));
     await ctx.answerCallbackQuery("Disabled (soft delete)");
-    await ctx.editMessageText("Product disabled.", {
-      reply_markup: new InlineKeyboard().text("📦 Products", "hex:products"),
-    });
+    try {
+      await ctx.editMessageText("Product disabled (hidden from shop).",
+        { reply_markup: new InlineKeyboard().text("📦 Products", "hex:products") });
+    } catch {
+      await ctx.reply("Product disabled (hidden from shop).",
+        { reply_markup: new InlineKeyboard().text("📦 Products", "hex:products") });
+    }
   });
 
   bot.callbackQuery(/^hex:peditname:(\d+)$/, async (ctx) => {
@@ -378,7 +416,9 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
       await ctx.answerCallbackQuery({ text: "Owner only", show_alert: true });
       return;
     }
-    ctx.session.hexEditId = parseInt(ctx.match[1]!);
+    const id = parseInt(ctx.match[1]!, 10);
+    ctx.session.hexEditId = id;
+    ctx.session.hexDraft = { ...(ctx.session.hexDraft || {}), editId: id };
     ctx.session.pendingAction = "hex:edit_name";
     await ctx.answerCallbackQuery();
     await ctx.reply("✏️ New product name?");
@@ -389,7 +429,9 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
       await ctx.answerCallbackQuery({ text: "Owner only", show_alert: true });
       return;
     }
-    ctx.session.hexEditId = parseInt(ctx.match[1]!);
+    const id = parseInt(ctx.match[1]!, 10);
+    ctx.session.hexEditId = id;
+    ctx.session.hexDraft = { ...(ctx.session.hexDraft || {}), editId: id };
     ctx.session.pendingAction = "hex:edit_price";
     await ctx.answerCallbackQuery();
     await ctx.reply("💰 New price? (e.g. 12.50)");
@@ -400,10 +442,34 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
       await ctx.answerCallbackQuery({ text: "Owner only", show_alert: true });
       return;
     }
-    ctx.session.hexEditId = parseInt(ctx.match[1]!);
+    const id = parseInt(ctx.match[1]!, 10);
+    ctx.session.hexEditId = id;
+    ctx.session.hexDraft = { ...(ctx.session.hexDraft || {}), editId: id };
     ctx.session.pendingAction = "hex:edit_desc";
     await ctx.answerCallbackQuery();
     await ctx.reply("📝 New description? (/skip to clear)");
+  });
+
+  bot.callbackQuery(/^hex:peditcat:(\d+)$/, async (ctx) => {
+    if (!ctx.from || !isOwner(ctx.from.id)) {
+      await ctx.answerCallbackQuery({ text: "Owner only", show_alert: true });
+      return;
+    }
+    const id = parseInt(ctx.match[1]!, 10);
+    await ctx.answerCallbackQuery();
+    await ctx.reply("📁 Choose new category:", { reply_markup: categoryKeyboardForEdit(id) });
+  });
+
+  bot.callbackQuery(/^hex:applycat:(\d+):(.+)$/, async (ctx) => {
+    if (!ctx.from || !isOwner(ctx.from.id)) {
+      await ctx.answerCallbackQuery({ text: "Owner only", show_alert: true });
+      return;
+    }
+    const id = parseInt(ctx.match[1]!, 10);
+    const cat = ctx.match[2]!;
+    await db.update(productsTable).set({ category: cat, updatedAt: new Date() }).where(eq(productsTable.id, id));
+    await ctx.answerCallbackQuery(`Category → ${cat}`);
+    await showProductManage(ctx, id);
   });
 
   bot.callbackQuery("hex:orders", async (ctx) => {
@@ -416,7 +482,7 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
     if (orders.length === 0) {
       await ctx.editMessageText("📋 No orders yet.", {
         reply_markup: new InlineKeyboard().text("🔙 Hex", "hex:main"),
-      });
+      }).catch(() => ctx.reply("📋 No orders yet.", { reply_markup: new InlineKeyboard().text("🔙 Hex", "hex:main") }));
       return;
     }
     const kb = new InlineKeyboard();
@@ -424,10 +490,9 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
       kb.text(`#${o.id} ${o.status}`, `hex:oview:${o.id}`).row();
     }
     kb.text("🔙 Hex", "hex:main");
-    await ctx.editMessageText(`📋 *ORDERS* (${orders.length})`, {
-      parse_mode: "Markdown",
-      reply_markup: kb,
-    });
+    await ctx.editMessageText(`📋 ORDERS (${orders.length})`, { reply_markup: kb }).catch(() =>
+      ctx.reply(`📋 ORDERS (${orders.length})`, { reply_markup: kb }),
+    );
   });
 
   bot.callbackQuery(/^hex:oview:(\d+)$/, async (ctx) => {
@@ -436,10 +501,10 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
       return;
     }
     await ctx.answerCallbackQuery();
-    const id = parseInt(ctx.match[1]!);
+    const id = parseInt(ctx.match[1]!, 10);
     const [order] = await db.select().from(ordersTable).where(eq(ordersTable.id, id));
     if (!order) {
-      await ctx.editMessageText("Order not found.");
+      await ctx.reply("Order not found.");
       return;
     }
     const [product] = await db.select().from(productsTable).where(eq(productsTable.id, order.productId));
@@ -449,14 +514,17 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
       kb.text("✅ Confirm", `hex:oconfirm:${id}`).text("❌ Cancel", `hex:ocancel:${id}`).row();
     }
     kb.text("🔙 Orders", "hex:orders");
-    await ctx.editMessageText(
-      `📋 *ORDER #${id}*\n━━━━━━━━━━━━━━━━━━\n\n` +
-        `👤 ${order.userId}\n` +
-        `📦 ${product?.name ?? "?"}\n` +
-        `📊 ${order.status}\n` +
-        (pr ? `💰 ${pr.amount} ${pr.coin}\n` : ""),
-      { parse_mode: "Markdown", reply_markup: kb },
-    );
+    const text =
+      `📋 ORDER #${id}\n━━━━━━━━━━━━━━━━━━\n\n` +
+      `User: ${order.userId}\n` +
+      `Product: ${product?.name ?? "?"}\n` +
+      `Status: ${order.status}\n` +
+      (pr ? `Pay: ${pr.amount} ${pr.coin}\n` : "");
+    try {
+      await ctx.editMessageText(text, { reply_markup: kb });
+    } catch {
+      await ctx.reply(text, { reply_markup: kb });
+    }
   });
 
   bot.callbackQuery(/^hex:oconfirm:(\d+)$/, async (ctx) => {
@@ -464,7 +532,7 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
       await ctx.answerCallbackQuery({ text: "Owner only", show_alert: true });
       return;
     }
-    const id = parseInt(ctx.match[1]!);
+    const id = parseInt(ctx.match[1]!, 10);
     const [order] = await db.select().from(ordersTable).where(eq(ordersTable.id, id));
     if (!order) return;
     await db.update(ordersTable).set({ status: "confirmed", updatedAt: new Date() }).where(eq(ordersTable.id, id));
@@ -474,17 +542,17 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
       .where(eq(paymentRequestsTable.orderId, id))
       .catch(() => {});
     const [product] = await db.select().from(productsTable).where(eq(productsTable.id, order.productId));
-    let buyerMsg = `✅ *Order #${id} confirmed*\n\n📦 ${product?.name ?? "Your order"}`;
+    let buyerMsg = `✅ Order #${id} confirmed\n\n📦 ${product?.name ?? "Your order"}`;
     if (product?.deliveryType === "auto" && product.deliveryContent) {
       buyerMsg += `\n\n🎁 Delivery:\n${product.deliveryContent}`;
     } else {
       buyerMsg += `\n\nSeller will deliver shortly.`;
     }
-    await ctx.api.sendMessage(order.userId, buyerMsg, { parse_mode: "Markdown" }).catch(() => {});
+    await ctx.api.sendMessage(order.userId, buyerMsg).catch(() => {});
     await ctx.answerCallbackQuery("Confirmed");
     await ctx.editMessageText(`✅ Order #${id} confirmed.`, {
       reply_markup: new InlineKeyboard().text("📋 Orders", "hex:orders"),
-    });
+    }).catch(() => {});
   });
 
   bot.callbackQuery(/^hex:ocancel:(\d+)$/, async (ctx) => {
@@ -492,12 +560,12 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
       await ctx.answerCallbackQuery({ text: "Owner only", show_alert: true });
       return;
     }
-    const id = parseInt(ctx.match[1]!);
+    const id = parseInt(ctx.match[1]!, 10);
     await db.update(ordersTable).set({ status: "cancelled", updatedAt: new Date() }).where(eq(ordersTable.id, id));
     await ctx.answerCallbackQuery("Cancelled");
     await ctx.editMessageText(`❌ Order #${id} cancelled.`, {
       reply_markup: new InlineKeyboard().text("📋 Orders", "hex:orders"),
-    });
+    }).catch(() => {});
   });
 
   bot.callbackQuery("hex:payments", async (ctx) => {
@@ -507,12 +575,9 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
     }
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(
-      `💰 *PAYMENT SETTINGS*\n━━━━━━━━━━━━━━━━━━\n\nConfigure wallets in env or here (manual crypto).\nCryptoBot uses CRYPTOBOT_API_TOKEN on Render.`,
-      {
-        parse_mode: "Markdown",
-        reply_markup: new InlineKeyboard().text("🔙 Hex", "hex:main"),
-      },
-    );
+      `💰 PAYMENT SETTINGS\n━━━━━━━━━━━━━━━━━━\n\nCryptoBot: set CRYPTOBOT_API_TOKEN on Render.\nManual wallets: configure in env / payments panel.`,
+      { reply_markup: new InlineKeyboard().text("🔙 Hex", "hex:main") },
+    ).catch(() => {});
   });
 
   bot.callbackQuery("hex:stats", async (ctx) => {
@@ -526,12 +591,9 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
     const active = products.filter((p) => p.isActive).length;
     const confirmed = orders.filter((o) => o.status === "confirmed").length;
     await ctx.editMessageText(
-      `📊 *STATS*\n━━━━━━━━━━━━━━━━━━\n\n📦 Products: ${products.length} (${active} active)\n📋 Orders: ${orders.length} (${confirmed} confirmed)`,
-      {
-        parse_mode: "Markdown",
-        reply_markup: new InlineKeyboard().text("🔙 Hex", "hex:main"),
-      },
-    );
+      `📊 STATS\n━━━━━━━━━━━━━━━━━━\n\n📦 Products: ${products.length} (${active} active)\n📋 Orders: ${orders.length} (${confirmed} confirmed)`,
+      { reply_markup: new InlineKeyboard().text("🔙 Hex", "hex:main") },
+    ).catch(() => {});
   });
 
   bot.callbackQuery("hex:access", async (ctx) => {
@@ -541,11 +603,8 @@ export function registerHexCallbacks(bot: Bot<BotContext>): void {
     }
     await ctx.answerCallbackQuery();
     await ctx.editMessageText(
-      `🔑 *ACCESS*\n━━━━━━━━━━━━━━━━━━\n\nUse /access for the full access panel (users, invites, tiers).`,
-      {
-        parse_mode: "Markdown",
-        reply_markup: new InlineKeyboard().text("🔙 Hex", "hex:main"),
-      },
-    );
+      `🔑 ACCESS\n━━━━━━━━━━━━━━━━━━\n\nUse /access for the full access panel (users, invites, tiers).`,
+      { reply_markup: new InlineKeyboard().text("🔙 Hex", "hex:main") },
+    ).catch(() => {});
   });
 }
