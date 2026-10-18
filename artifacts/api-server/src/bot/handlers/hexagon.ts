@@ -313,6 +313,13 @@ export async function handleHexagonMessage(
   imageUrl?: string,
 ): Promise<void> {
   const userId = ctx.from!.id;
+  const trimmed = (input || "").trim();
+  const cmd = trimmed.split(/\s+/)[0]?.toLowerCase() ?? "";
+  if (cmd === "/exit" || cmd.startsWith("/exit@")) {
+    disableCrescentChat(ctx);
+    await ctx.reply("👋 Left Crescent chat mode.");
+    return;
+  }
   if (!(await checkCrescentAccess(ctx))) return;
 
   const updateId = ctx.update?.update_id;
@@ -491,7 +498,9 @@ export function registerHexagonHandlers(bot: MyBot): void {
 
   bot.command("exit", async (ctx) => {
     disableCrescentChat(ctx);
-    await ctx.reply("👋 Left Crescent chat mode.");
+    ctx.session.crescentMode = false;
+    ctx.session.pendingAction = undefined;
+    await ctx.reply("👋 Left Crescent chat mode.\n\nYou can open the menu with /menu or chat again with /crescent.");
   });
 }
 
