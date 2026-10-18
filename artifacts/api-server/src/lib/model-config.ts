@@ -36,12 +36,42 @@ export interface ModelRoutingConfig {
 }
 
 const DEFAULT_ROUTES: Record<TaskType, TaskRoute> = {
-  chat: { primary: "gpt-4o-mini", fallbacks: ["gpt-4o", "claude-3-5-sonnet-20241022"], params: { maxTokens: 2000, temperature: 0.3 } },
-  analysis: { primary: "gpt-4o", fallbacks: ["claude-3-5-sonnet-20241022"], params: { maxTokens: 4000, temperature: 0.1 } },
-  code: { primary: "claude-3-5-sonnet-20241022", fallbacks: ["gpt-4o"], params: { maxTokens: 8000, temperature: 0 } },
-  math: { primary: "gpt-4o", fallbacks: ["claude-3-5-sonnet-20241022"], params: { maxTokens: 2000, temperature: 0 } },
-  creative: { primary: "claude-3-5-sonnet-20241022", fallbacks: ["gpt-4o"], params: { maxTokens: 4000, temperature: 0.7 } },
-  vision: { primary: "gpt-4o", fallbacks: ["claude-3-5-sonnet-20241022"], params: { maxTokens: 2000, temperature: 0.2 } },
+  // Prefer OpenRouter free models first so Crescent works without paid OpenAI credits.
+  chat: {
+    primary: "google/gemini-2.0-flash-exp:free",
+    fallbacks: [
+      "google/gemma-3-27b-it:free",
+      "meta-llama/llama-3.3-70b-instruct:free",
+      "gpt-4o-mini",
+      "gpt-4o",
+    ],
+    params: { maxTokens: 900, temperature: 0.3 },
+  },
+  analysis: {
+    primary: "google/gemini-2.0-flash-exp:free",
+    fallbacks: ["google/gemma-3-27b-it:free", "gpt-4o-mini", "gpt-4o"],
+    params: { maxTokens: 1200, temperature: 0.1 },
+  },
+  code: {
+    primary: "google/gemma-3-27b-it:free",
+    fallbacks: ["google/gemini-2.0-flash-exp:free", "gpt-4o-mini", "gpt-4o"],
+    params: { maxTokens: 1500, temperature: 0 },
+  },
+  math: {
+    primary: "google/gemini-2.0-flash-exp:free",
+    fallbacks: ["gpt-4o-mini", "gpt-4o"],
+    params: { maxTokens: 900, temperature: 0 },
+  },
+  creative: {
+    primary: "google/gemini-2.0-flash-exp:free",
+    fallbacks: ["google/gemma-3-27b-it:free", "gpt-4o-mini"],
+    params: { maxTokens: 1000, temperature: 0.7 },
+  },
+  vision: {
+    primary: "google/gemini-2.0-flash-exp:free",
+    fallbacks: ["gpt-4o-mini", "gpt-4o", "google/gemma-3-27b-it:free"],
+    params: { maxTokens: 900, temperature: 0.2 },
+  },
 };
 
 const DEFAULT_PROVIDERS: Record<ProviderName, ProviderConfig> = {
@@ -61,62 +91,67 @@ function stringValue(value: unknown, fallback: string): string {
 }
 
 function numberValue(value: unknown, fallback: number, minimum?: number): number {
-  const parsed = typeof value === "number" ? value : Number(value);
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
   return Number.isFinite(parsed) && (minimum === undefined || parsed >= minimum) ? parsed : fallback;
 }
 
 function stringList(value: unknown, fallback: string[]): string[] {
   const values = Array.isArray(value) ? value : typeof value === "string" ? [value] : fallback;
-  return values.filter((item): item is string => typeof item === "string" && item.trim().length > 0).map((item) => item.trim());
+  const out = values.map((v) => String(v).trim()).filter(Boolean);
+  return out.length ? out : fallback;
 }
 
 function loadFromDisk(): ModelRoutingConfig {
-  const configuredPath = process.env.MODEL_CONFIG_PATH
-    ? path.resolve(process.env.MODEL_CONFIG_PATH)
-    : undefined;
-  const candidates = configuredPath
-    ? [configuredPath]
-    : [
-        path.resolve(process.cwd(), "config/models.yaml"),
-        path.resolve(process.cwd(), "../../config/models.yaml"),
-        path.resolve(process.cwd(), "../config/models.yaml"),
-      ];
-  const filePath = candidates.find((candidate) => existsSync(candidate)) ?? candidates[0]!;
-  const source = readFileSync(filePath, "utf8");
-  const parsed = record(parse(source));
-  const rawRoutes = record(parsed["taskrouting"]);
-  const rawProviders = record(parsed["providers"]);
-  const rawDefaults = record(parsed["defaults"]);
+  const candidates = [
+    path.join(process.cwd(), "config", "models.yaml"),
+    path.join(process.cwd(), "..", "..", "config", "models.yaml"),
+    path.join(process.cwd(), "artifacts", "api-server", "config", "models.yaml"),
+  ];
+  let rawFile: Record<string, unknown> = {};
+  for (const file of candidates) {
+    if (!existsSync(file)) continue;
+    try {
+      rawFile = record(parse(readFileSync(file, "utf8")));
+      break;
+    } catch {
+      rawFile = {};
+    }
+  }
 
-  const taskRouting = Object.fromEntries(TASK_TYPES.map((task) => {
+  const taskRouting = { ...DEFAULT_ROUTES } as Record<TaskType, TaskRoute>;
+  const rawTasks = record(rawFile["taskRouting"] ?? rawFile["tasks"]);
+  for (const task of TASK_TYPES) {
     const fallback = DEFAULT_ROUTES[task];
-    const raw = record(rawRoutes[task]);
+    const raw = record(rawTasks[task]);
     const rawParams = record(raw["params"]);
-    return [task, {
+    taskRouting[task] = {
       primary: stringValue(raw["primary"], fallback.primary),
       fallbacks: stringList(raw["fallbacks"], fallback.fallbacks),
       params: {
         maxTokens: numberValue(rawParams["maxtokens"] ?? rawParams["maxTokens"], fallback.params.maxTokens, 1),
         temperature: numberValue(rawParams["temperature"], fallback.params.temperature, 0),
       },
-    } satisfies TaskRoute];
-  })) as Record<TaskType, TaskRoute>;
+    };
+  }
 
-  const providers = Object.fromEntries((Object.keys(DEFAULT_PROVIDERS) as ProviderName[]).map((name) => {
+  const providers = { ...DEFAULT_PROVIDERS } as Record<ProviderName, ProviderConfig>;
+  const rawProviders = record(rawFile["providers"]);
+  for (const name of Object.keys(DEFAULT_PROVIDERS) as ProviderName[]) {
     const fallback = DEFAULT_PROVIDERS[name];
     const raw = record(rawProviders[name]);
-    return [name, {
+    providers[name] = {
       apiKeyEnv: stringValue(raw["apikeyenv"] ?? raw["apiKeyEnv"], fallback.apiKeyEnv),
       baseUrl: stringValue(raw["baseurl"] ?? raw["baseUrl"], fallback.baseUrl).replace(/\/$/, ""),
       models: stringList(raw["models"], fallback.models),
-    } satisfies ProviderConfig];
-  })) as Record<ProviderName, ProviderConfig>;
+    };
+  }
 
+  const rawDefaults = record(rawFile["defaults"]);
   return {
     taskRouting,
     providers,
     defaults: {
-      timeoutSeconds: numberValue(rawDefaults["timeoutseconds"] ?? rawDefaults["timeoutSeconds"], 30, 1),
+      timeoutSeconds: numberValue(rawDefaults["timeoutseconds"] ?? rawDefaults["timeoutSeconds"], 60, 5),
       maxRetries: numberValue(rawDefaults["maxretries"] ?? rawDefaults["maxRetries"], 2, 0),
       retryBackoffBase: numberValue(rawDefaults["retrybackoffbase"] ?? rawDefaults["retryBackoffBase"], 1.5, 1),
       embedModel: stringValue(rawDefaults["embedmodel"] ?? rawDefaults["embedModel"], "text-embedding-3-small"),
