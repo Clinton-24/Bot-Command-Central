@@ -146,12 +146,42 @@ export function registerMenuHandlers(bot: MyBot): void {
   bot.on("message:text", async (ctx, next) => {
     const action = ctx.session.pendingAction;
     const text = ctx.message.text;
+    const cmd = text.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
+
+    // Commands must work even while Crescent chat mode is on
+    if (cmd === "/exit" || cmd.startsWith("/exit@")) {
+      const { disableCrescentChat } = await import("./hexagon");
+      disableCrescentChat(ctx);
+      await ctx.reply("👋 Left Crescent chat mode.");
+      return;
+    }
+    if (cmd === "/menu" || cmd.startsWith("/menu@")) {
+      await sendMainMenu(ctx);
+      return;
+    }
+    if (
+      cmd === "/crescent" ||
+      cmd.startsWith("/crescent@") ||
+      cmd === "/hexagon" ||
+      cmd.startsWith("/hexagon@")
+    ) {
+      return next();
+    }
+    if (cmd.startsWith("/") && (ctx.session.crescentMode || action === "hexagon:input")) {
+      return next();
+    }
 
     if (ctx.session.crescentMode || action === "hexagon:input") {
       await handleHexagonMessage(ctx, text);
       return;
     }
     if (action === "hexagon:imagine") {
+      if (cmd === "/exit" || cmd.startsWith("/exit@")) {
+        const { disableCrescentChat } = await import("./hexagon");
+        disableCrescentChat(ctx);
+        await ctx.reply("👋 Left Crescent chat mode.");
+        return;
+      }
       await ctx.reply("Use /imagine your prompt for image generation.");
       ctx.session.pendingAction = "hexagon:input";
       return;
@@ -197,7 +227,6 @@ export function registerMenuHandlers(bot: MyBot): void {
       return;
     }
 
-    // invite codes via /start already handled; free text invite attempt
     if (/^[A-Za-z0-9]{6,12}$/.test(text.trim()) && !text.startsWith("/")) {
       try {
         const handled = await handleInviteCode(ctx, text.trim());
