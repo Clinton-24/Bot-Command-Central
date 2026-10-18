@@ -132,6 +132,10 @@ async function callProvider(
   if (!apiKey) throw new Error(`${providerConfig.apiKeyEnv} is not configured`);
 
   const resolvedModel = provider === "openrouter" ? openRouterModelId(model) : nativeModelId(model);
+  // Free-tier OpenRouter accounts often cannot afford high max_tokens
+  if (provider === "openrouter" && (resolvedModel.includes(":free") || !getProviderApiKey("openai"))) {
+    maxTokens = Math.min(maxTokens, 900);
+  }
 
   if (provider === "anthropic") {
     const system = messages
@@ -203,9 +207,23 @@ async function callProvider(
   return content;
 }
 
+const OPENROUTER_FREE_CHAT = [
+  "google/gemini-2.0-flash-exp:free",
+  "google/gemma-3-27b-it:free",
+  "meta-llama/llama-3.3-70b-instruct:free",
+  "nvidia/nemotron-nano-9b-v2:free",
+];
+
 export async function routeChat(task: TaskType, messages: ChatMessage[]): Promise<RoutedChatResponse> {
   const route = getTaskRoute(task);
-  const candidates = getTaskModels(task);
+  const hasOpenAI = Boolean(getProviderApiKey("openai"));
+  const hasAnthropic = Boolean(getProviderApiKey("anthropic"));
+  const hasOR = Boolean(getProviderApiKey("openrouter"));
+  let candidates = getTaskModels(task);
+  // If only OpenRouter is configured, prepend free models so we do not die on paid-only IDs
+  if (hasOR && !hasOpenAI && !hasAnthropic) {
+    candidates = [...new Set([...OPENROUTER_FREE_CHAT, ...candidates])];
+  }
   let lastError = "No provider is configured";
 
   for (const model of candidates) {
