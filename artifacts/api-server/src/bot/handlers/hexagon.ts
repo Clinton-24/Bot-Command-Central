@@ -475,6 +475,43 @@ export async function logGroupMessage(ctx: BotContext): Promise<void> {
 }
 
 export function registerHexagonHandlers(bot: MyBot): void {
+  // Photos must be handled explicitly — menu only listens to message:text
+  bot.on("message:photo", async (ctx) => {
+    if (!ctx.from) return;
+    const inCrescent =
+      !!ctx.session.crescentMode ||
+      ctx.session.pendingAction === "hexagon:input" ||
+      ctx.session.pendingAction === "hexagon:imagine";
+    if (!inCrescent && ctx.chat?.type === "private") {
+      const cap = (ctx.message.caption || "").toLowerCase();
+      if (!cap.includes("analy") && !cap.includes("read") && !cap.includes("ocr") && !cap.includes("describe")) {
+        return;
+      }
+      enableCrescentChat(ctx);
+    } else if (!inCrescent) {
+      return;
+    }
+
+    const photos = ctx.message.photo;
+    if (!photos || photos.length === 0) return;
+    const best = photos[photos.length - 1]!;
+    const caption =
+      ctx.message.caption?.trim() ||
+      "Describe this image clearly and extract all readable text once (no repetition).";
+
+    try {
+      await ctx.replyWithChatAction("upload_photo").catch(() => {});
+      const dataUrl = await telegramPhotoDataUrl(bot, best.file_id);
+      enableCrescentChat(ctx);
+      await handleHexagonMessage(ctx, caption, dataUrl);
+    } catch (err) {
+      logger.error({ err, userId: ctx.from.id }, "Crescent photo analysis failed");
+      await ctx.reply(
+        `❌ Could not analyse image.\n${err instanceof Error ? err.message : "Unknown error"}`,
+      ).catch(() => {});
+    }
+  });
+
   bot.command("crescent", async (ctx) => {
     if (!(await checkCrescentAccess(ctx))) return;
     enableCrescentChat(ctx);
