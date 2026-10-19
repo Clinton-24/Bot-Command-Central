@@ -146,12 +146,16 @@ function buildOpenAiMessages(messages: ChatMessage[]): Array<{ role: string; con
 
 function googleModelId(model: string): string {
   let id = nativeModelId(model).replace(/:free$/i, "");
+  if (id.includes("gemini-3.8-flash")) return "gemini-3.8-flash";
+  if (id.includes("gemini-3.6-flash")) return "gemini-3.6-flash";
+  if (id.includes("gemini-2.5-pro")) return "gemini-2.5-pro";
+  if (id.includes("gemini-2.5-flash")) return "gemini-2.5-flash";
   if (id.includes("gemini-2.0-flash-lite")) return "gemini-2.0-flash-lite";
   if (id.includes("gemini-2.0-flash")) return "gemini-2.0-flash";
   if (id.includes("gemini-1.5-flash")) return "gemini-1.5-flash";
   if (id.includes("gemini-1.5-pro")) return "gemini-1.5-pro";
   if (id.startsWith("gemini-")) return id;
-  return "gemini-2.0-flash";
+  return "gemini-3.8-flash";
 }
 
 async function callGoogle(
@@ -335,7 +339,7 @@ const OPENROUTER_FREE_CHAT = [
   "nvidia/nemotron-nano-9b-v2:free",
 ];
 
-const GOOGLE_CHAT = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite"];
+const GOOGLE_CHAT = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.0-flash"];
 
 export async function routeChat(task: TaskType, messages: ChatMessage[]): Promise<RoutedChatResponse> {
   const route = getTaskRoute(task);
