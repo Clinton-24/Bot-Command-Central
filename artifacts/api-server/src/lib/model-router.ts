@@ -355,7 +355,6 @@ function messagesHaveImage(messages: ChatMessage[]): boolean {
   return false;
 }
 
-/** Multimodal-capable models only — text-only free models claim they cannot see images. */
 const VISION_MODELS = [
   "gemini-3.8-flash",
   "gemini-3.6-flash",
@@ -623,6 +622,28 @@ export async function generateImage(prompt: string, size = "1024x1024"): Promise
       "• Set OPENAI_API_KEY for DALL·E\n" +
       `Details: ${errors.join(" | ")}`,
   );
+}
+
+export async function createEmbedding(input: string): Promise<RoutedEmbeddingResponse | null> {
+  const config = getModelConfig();
+  const provider = "openai" as const;
+  const apiKey = getProviderApiKey(provider);
+  if (!apiKey) return null;
+
+  try {
+    const body = await requestJson(`${config.providers.openai.baseUrl}/embeddings`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ model: config.defaults.embedModel, input }),
+    });
+    const data = Array.isArray(body.data) ? (body.data as Array<{ embedding?: unknown }>) : [];
+    const embedding = data[0]?.embedding;
+    if (!Array.isArray(embedding) || embedding.length !== config.defaults.embedDim) return null;
+    return { embedding: embedding.map(Number), model: config.defaults.embedModel };
+  } catch (err) {
+    logger.warn({ err }, "AI embedding request failed; continuing without vector memory");
+    return null;
+  }
 }
 
 export function configuredModelCount(task: TaskType): number {
