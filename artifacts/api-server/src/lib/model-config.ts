@@ -36,41 +36,41 @@ export interface ModelRoutingConfig {
 }
 
 const DEFAULT_ROUTES: Record<TaskType, TaskRoute> = {
-  // Google AI Studio (Gemini) first when GOOGLE/GEMINI key is set; then OpenRouter free; then paid.
+  // Gemini 3.8 Flash is free on Google AI Studio; Gemini 4 is paid-only.
   chat: {
-    primary: "gemini-2.0-flash",
+    primary: "gemini-3.8-flash",
     fallbacks: [
-      "gemini-1.5-flash",
-      "gemini-2.0-flash-lite",
+      "gemini-3.6-flash",
+      "gemini-2.5-flash",
+      "gemini-2.0-flash",
       "google/gemini-2.0-flash-exp:free",
-      "google/gemma-3-27b-it:free",
       "gpt-4o-mini",
     ],
     params: { maxTokens: 1200, temperature: 0.3 },
   },
   analysis: {
-    primary: "gemini-2.0-flash",
-    fallbacks: ["gemini-1.5-flash", "google/gemini-2.0-flash-exp:free", "gpt-4o-mini"],
+    primary: "gemini-3.8-flash",
+    fallbacks: ["gemini-3.6-flash", "gemini-2.5-flash", "gpt-4o-mini"],
     params: { maxTokens: 1500, temperature: 0.1 },
   },
   code: {
-    primary: "gemini-2.0-flash",
-    fallbacks: ["gemini-1.5-flash", "google/gemma-3-27b-it:free", "gpt-4o-mini"],
+    primary: "gemini-3.8-flash",
+    fallbacks: ["gemini-3.6-flash", "gemini-2.5-flash", "gpt-4o-mini"],
     params: { maxTokens: 2000, temperature: 0 },
   },
   math: {
-    primary: "gemini-2.0-flash",
-    fallbacks: ["gemini-1.5-flash", "gpt-4o-mini"],
+    primary: "gemini-3.8-flash",
+    fallbacks: ["gemini-2.5-flash", "gpt-4o-mini"],
     params: { maxTokens: 1200, temperature: 0 },
   },
   creative: {
-    primary: "gemini-2.0-flash",
-    fallbacks: ["gemini-1.5-flash", "google/gemini-2.0-flash-exp:free", "gpt-4o-mini"],
+    primary: "gemini-3.8-flash",
+    fallbacks: ["gemini-3.6-flash", "gemini-2.5-flash", "gpt-4o-mini"],
     params: { maxTokens: 1500, temperature: 0.7 },
   },
   vision: {
-    primary: "gemini-2.0-flash",
-    fallbacks: ["gemini-1.5-flash", "google/gemini-2.0-flash-exp:free", "gpt-4o-mini"],
+    primary: "gemini-3.8-flash",
+    fallbacks: ["gemini-3.6-flash", "gemini-2.5-flash", "gpt-4o-mini"],
     params: { maxTokens: 1200, temperature: 0.2 },
   },
 };
@@ -95,11 +95,12 @@ const DEFAULT_PROVIDERS: Record<ProviderName, ProviderConfig> = {
     apiKeyEnv: "GEMINI_API_KEY",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta",
     models: [
-      "gemini-2.0-flash",
-      "gemini-2.0-flash-lite",
-      "gemini-1.5-flash",
-      "gemini-1.5-pro",
+      "gemini-3.8-flash",
+      "gemini-3.6-flash",
       "gemini-2.5-flash",
+      "gemini-2.5-pro",
+      "gemini-2.0-flash",
+      "gemini-1.5-flash",
       "*",
     ],
   },
