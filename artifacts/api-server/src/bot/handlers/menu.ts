@@ -148,7 +148,6 @@ export function registerMenuHandlers(bot: MyBot): void {
     const text = ctx.message.text;
     const cmd = text.trim().split(/\s+/)[0]?.toLowerCase() ?? "";
 
-    // Commands must work even while Crescent chat mode is on
     if (cmd === "/exit" || cmd.startsWith("/exit@")) {
       const { disableCrescentChat } = await import("./hexagon");
       disableCrescentChat(ctx);
@@ -172,6 +171,13 @@ export function registerMenuHandlers(bot: MyBot): void {
     }
 
     if (ctx.session.crescentMode || action === "hexagon:input") {
+      await handleHexagonMessage(ctx, text);
+      return;
+    }
+    // Private free-text with no active draft → Crescent (session may have dropped)
+    if (ctx.chat?.type === "private" && !cmd.startsWith("/") && !action) {
+      ctx.session.crescentMode = true;
+      ctx.session.pendingAction = "hexagon:input";
       await handleHexagonMessage(ctx, text);
       return;
     }
