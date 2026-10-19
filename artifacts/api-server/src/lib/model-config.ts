@@ -4,7 +4,7 @@ import { parse } from "yaml";
 
 export const TASK_TYPES = ["chat", "analysis", "code", "math", "creative", "vision"] as const;
 export type TaskType = typeof TASK_TYPES[number];
-export type ProviderName = "openai" | "anthropic" | "openrouter";
+export type ProviderName = "openai" | "anthropic" | "openrouter" | "google";
 
 export interface ModelParams {
   maxTokens: number;
@@ -36,54 +36,79 @@ export interface ModelRoutingConfig {
 }
 
 const DEFAULT_ROUTES: Record<TaskType, TaskRoute> = {
-  // Prefer OpenRouter free models first so Crescent works without paid OpenAI credits.
+  // Google AI Studio (Gemini) first when GOOGLE/GEMINI key is set; then OpenRouter free; then paid.
   chat: {
-    primary: "google/gemini-2.0-flash-exp:free",
+    primary: "gemini-2.0-flash",
     fallbacks: [
+      "gemini-1.5-flash",
+      "gemini-2.0-flash-lite",
+      "google/gemini-2.0-flash-exp:free",
       "google/gemma-3-27b-it:free",
-      "meta-llama/llama-3.3-70b-instruct:free",
       "gpt-4o-mini",
-      "gpt-4o",
     ],
-    params: { maxTokens: 900, temperature: 0.3 },
+    params: { maxTokens: 1200, temperature: 0.3 },
   },
   analysis: {
-    primary: "google/gemini-2.0-flash-exp:free",
-    fallbacks: ["google/gemma-3-27b-it:free", "gpt-4o-mini", "gpt-4o"],
-    params: { maxTokens: 1200, temperature: 0.1 },
+    primary: "gemini-2.0-flash",
+    fallbacks: ["gemini-1.5-flash", "google/gemini-2.0-flash-exp:free", "gpt-4o-mini"],
+    params: { maxTokens: 1500, temperature: 0.1 },
   },
   code: {
-    primary: "google/gemma-3-27b-it:free",
-    fallbacks: ["google/gemini-2.0-flash-exp:free", "gpt-4o-mini", "gpt-4o"],
-    params: { maxTokens: 1500, temperature: 0 },
+    primary: "gemini-2.0-flash",
+    fallbacks: ["gemini-1.5-flash", "google/gemma-3-27b-it:free", "gpt-4o-mini"],
+    params: { maxTokens: 2000, temperature: 0 },
   },
   math: {
-    primary: "google/gemini-2.0-flash-exp:free",
-    fallbacks: ["gpt-4o-mini", "gpt-4o"],
-    params: { maxTokens: 900, temperature: 0 },
+    primary: "gemini-2.0-flash",
+    fallbacks: ["gemini-1.5-flash", "gpt-4o-mini"],
+    params: { maxTokens: 1200, temperature: 0 },
   },
   creative: {
-    primary: "google/gemini-2.0-flash-exp:free",
-    fallbacks: ["google/gemma-3-27b-it:free", "gpt-4o-mini"],
-    params: { maxTokens: 1000, temperature: 0.7 },
+    primary: "gemini-2.0-flash",
+    fallbacks: ["gemini-1.5-flash", "google/gemini-2.0-flash-exp:free", "gpt-4o-mini"],
+    params: { maxTokens: 1500, temperature: 0.7 },
   },
   vision: {
-    primary: "google/gemini-2.0-flash-exp:free",
-    fallbacks: ["gpt-4o-mini", "gpt-4o", "google/gemma-3-27b-it:free"],
-    params: { maxTokens: 900, temperature: 0.2 },
+    primary: "gemini-2.0-flash",
+    fallbacks: ["gemini-1.5-flash", "google/gemini-2.0-flash-exp:free", "gpt-4o-mini"],
+    params: { maxTokens: 1200, temperature: 0.2 },
   },
 };
 
 const DEFAULT_PROVIDERS: Record<ProviderName, ProviderConfig> = {
-  openai: { apiKeyEnv: "OPENAI_API_KEY", baseUrl: "https://api.openai.com/v1", models: ["gpt-4o", "gpt-4o-mini", "text-embedding-3-small"] },
-  anthropic: { apiKeyEnv: "ANTHROPIC_API_KEY", baseUrl: "https://api.anthropic.com/v1", models: ["claude-3-5-sonnet-20241022"] },
-  openrouter: { apiKeyEnv: "OPENROUTER_API_KEY", baseUrl: "https://openrouter.ai/api/v1", models: ["*"] },
+  openai: {
+    apiKeyEnv: "OPENAI_API_KEY",
+    baseUrl: "https://api.openai.com/v1",
+    models: ["gpt-4o", "gpt-4o-mini", "text-embedding-3-small"],
+  },
+  anthropic: {
+    apiKeyEnv: "ANTHROPIC_API_KEY",
+    baseUrl: "https://api.anthropic.com/v1",
+    models: ["claude-3-5-sonnet-20241022"],
+  },
+  openrouter: {
+    apiKeyEnv: "OPENROUTER_API_KEY",
+    baseUrl: "https://openrouter.ai/api/v1",
+    models: ["*"],
+  },
+  google: {
+    apiKeyEnv: "GEMINI_API_KEY",
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+    models: [
+      "gemini-2.0-flash",
+      "gemini-2.0-flash-lite",
+      "gemini-1.5-flash",
+      "gemini-1.5-pro",
+      "gemini-2.5-flash",
+      "*",
+    ],
+  },
 };
 
 let cachedConfig: ModelRoutingConfig | undefined;
 
 function record(value: unknown): Record<string, unknown> {
-  return typeof value === "object" && value !== null ? value as Record<string, unknown> : {};
+  return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
 
 function stringValue(value: unknown, fallback: string): string {
@@ -180,6 +205,7 @@ export function getProviderApiKey(provider: ProviderName): string {
     openai: ["OPENAI_API_KEY", "OPENAIAPIKEY"],
     anthropic: ["ANTHROPIC_API_KEY", "ANTHROPICAPIKEY"],
     openrouter: ["OPENROUTER_API_KEY", "AGENTROUTER_API_KEY"],
+    google: ["GEMINI_API_KEY", "GOOGLE_AI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"],
   };
   return process.env[config.apiKeyEnv] ?? aliases[provider].map((key) => process.env[key]).find(Boolean) ?? "";
 }
