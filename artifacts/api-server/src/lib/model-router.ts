@@ -50,23 +50,45 @@ function nativeModelId(model: string): string {
   return model.slice(slash + 1);
 }
 
+function isGoogleNativeModel(model: string): boolean {
+  const bare = nativeModelId(model).replace(/:free$/i, "");
+  if (model.includes(":free")) return false;
+  if (model.startsWith("google/") && bare.startsWith("gemini")) {
+    return bare.startsWith("gemini");
+  }
+  return bare.startsWith("gemini-") || bare.startsWith("gemini");
+}
+
 function providerForModel(model: string): ProviderName {
   const bare = nativeModelId(model);
   if (bare.startsWith("gpt-") || bare.startsWith("o1") || bare.startsWith("o3") || bare.startsWith("dall-e") || bare.startsWith("text-embedding-")) {
     return "openai";
   }
   if (bare.startsWith("claude-")) return "anthropic";
+  if (isGoogleNativeModel(model)) return "google";
   return "openrouter";
+}
+
+function bareStartsGemini(model: string): boolean {
+  return nativeModelId(model).replace(/:free$/i, "").startsWith("gemini");
 }
 
 function providersForModel(model: string): ProviderName[] {
   const direct = providerForModel(model);
-  if (direct === "openrouter") return ["openrouter"];
   const hasDirect = Boolean(getProviderApiKey(direct));
   const hasOr = Boolean(getProviderApiKey("openrouter"));
+  const hasGoogle = Boolean(getProviderApiKey("google"));
+
+  if (direct === "google") {
+    if (hasGoogle) return ["google"];
+    if (hasOr) return ["openrouter"];
+    return ["google"];
+  }
+  if (direct === "openrouter") return ["openrouter"];
   if (hasDirect && hasOr) return [direct, "openrouter"];
   if (hasDirect) return [direct];
   if (hasOr) return ["openrouter"];
+  if (hasGoogle && bareStartsGemini(model)) return ["google"];
   return [direct, "openrouter"];
 }
 
@@ -99,14 +121,17 @@ async function requestJson(
     const raw = await response.text();
     let body: Record<string, unknown> = {};
     try {
-      body = raw ? JSON.parse(raw) as Record<string, unknown> : {};
+      body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
     } catch {
       body = {};
     }
     if (!response.ok) {
-      const error = typeof body.error === "object" && body.error !== null
-        ? (body.error as { message?: string }).message
-        : undefined;
+      const error =
+        typeof body.error === "object" && body.error !== null
+          ? (body.error as { message?: string }).message
+          : typeof body.message === "string"
+            ? body.message
+            : undefined;
       throw new Error(`${response.status} ${error ?? response.statusText}`);
     }
     return body;
@@ -117,6 +142,97 @@ async function requestJson(
 
 function buildOpenAiMessages(messages: ChatMessage[]): Array<{ role: string; content: unknown }> {
   return messages.map((message) => ({ role: message.role, content: message.content }));
+}
+
+function googleModelId(model: string): string {
+  let id = nativeModelId(model).replace(/:free$/i, "");
+  if (id.includes("gemini-2.0-flash-lite")) return "gemini-2.0-flash-lite";
+  if (id.includes("gemini-2.0-flash")) return "gemini-2.0-flash";
+  if (id.includes("gemini-1.5-flash")) return "gemini-1.5-flash";
+  if (id.includes("gemini-1.5-pro")) return "gemini-1.5-pro";
+  if (id.startsWith("gemini-")) return id;
+  return "gemini-2.0-flash";
+}
+
+async function callGoogle(
+  model: string,
+  messages: ChatMessage[],
+  maxTokens: number,
+  temperature: number,
+): Promise<string> {
+  const providerConfig = getModelConfig().providers.google;
+  const apiKey = getProviderApiKey("google");
+  if (!apiKey) throw new Error("GEMINI_API_KEY is not configured");
+
+  const resolvedModel = googleModelId(model);
+  const systemParts: string[] = [];
+  const contents: Array<{ role: string; parts: Array<Record<string, unknown>> }> = [];
+
+  for (const message of messages) {
+    if (message.role === "system") {
+      systemParts.push(typeof message.content === "string" ? message.content : "");
+      continue;
+    }
+    const role = message.role === "assistant" ? "model" : "user";
+    const parts: Array<Record<string, unknown>> = [];
+    if (typeof message.content === "string") {
+      parts.push({ text: message.content });
+    } else {
+      for (const part of message.content) {
+        if (part.type === "text") {
+          parts.push({ text: part.text });
+        } else {
+          const url = part.image_url.url;
+          const match = url.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,(.+)$/);
+          if (match) {
+            parts.push({
+              inline_data: {
+                mime_type: match[1],
+                data: match[2],
+              },
+            });
+          } else {
+            parts.push({ text: `[Image URL: ${url}]` });
+          }
+        }
+      }
+    }
+    if (parts.length) contents.push({ role, parts });
+  }
+
+  if (contents.length === 0) {
+    contents.push({ role: "user", parts: [{ text: "Hello" }] });
+  }
+
+  const body: Record<string, unknown> = {
+    contents,
+    generationConfig: {
+      maxOutputTokens: Math.min(maxTokens, 2048),
+      temperature,
+    },
+  };
+  if (systemParts.length) {
+    body.systemInstruction = { parts: [{ text: systemParts.join("\n\n") }] };
+  }
+
+  const url = `${providerConfig.baseUrl}/models/${resolvedModel}:generateContent`;
+  const result = await requestJson(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-goog-api-key": apiKey,
+    },
+    body: JSON.stringify(body),
+  });
+
+  const candidates = Array.isArray(result.candidates) ? result.candidates : [];
+  const first = candidates[0] as { content?: { parts?: Array<{ text?: string }> } } | undefined;
+  const text = (first?.content?.parts ?? []).map((p) => p.text ?? "").join("").trim();
+  if (!text) {
+    const block = result.promptFeedback ?? result.error;
+    throw new Error(`Google Gemini returned an empty response${block ? `: ${JSON.stringify(block)}` : ""}`);
+  }
+  return text;
 }
 
 async function callProvider(
@@ -131,8 +247,11 @@ async function callProvider(
   const apiKey = getProviderApiKey(provider);
   if (!apiKey) throw new Error(`${providerConfig.apiKeyEnv} is not configured`);
 
+  if (provider === "google") {
+    return callGoogle(model, messages, maxTokens, temperature);
+  }
+
   const resolvedModel = provider === "openrouter" ? openRouterModelId(model) : nativeModelId(model);
-  // Free-tier OpenRouter accounts often cannot afford high max_tokens
   if (provider === "openrouter" && (resolvedModel.includes(":free") || !getProviderApiKey("openai"))) {
     maxTokens = Math.min(maxTokens, 900);
   }
@@ -189,10 +308,12 @@ async function callProvider(
     headers: {
       Authorization: `Bearer ${apiKey}`,
       "Content-Type": "application/json",
-      ...(provider === "openrouter" ? {
-        "HTTP-Referer": process.env.RENDER_EXTERNAL_URL ?? "https://bot-command-central-1.onrender.com",
-        "X-Title": "Crescent-AI",
-      } : {}),
+      ...(provider === "openrouter"
+        ? {
+            "HTTP-Referer": process.env.RENDER_EXTERNAL_URL ?? "https://bot-command-central-1.onrender.com",
+            "X-Title": "Crescent-AI",
+          }
+        : {}),
     },
     body: JSON.stringify({
       model: resolvedModel,
@@ -201,7 +322,7 @@ async function callProvider(
       messages: buildOpenAiMessages(messages),
     }),
   });
-  const choices = Array.isArray(body.choices) ? body.choices as OpenAiResponse["choices"] : [];
+  const choices = Array.isArray(body.choices) ? (body.choices as OpenAiResponse["choices"]) : [];
   const content = normalizeContent(choices?.[0]?.message?.content);
   if (!content) throw new Error(`${provider} returned an empty response`);
   return content;
@@ -214,22 +335,33 @@ const OPENROUTER_FREE_CHAT = [
   "nvidia/nemotron-nano-9b-v2:free",
 ];
 
+const GOOGLE_CHAT = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-2.0-flash-lite"];
+
 export async function routeChat(task: TaskType, messages: ChatMessage[]): Promise<RoutedChatResponse> {
   const route = getTaskRoute(task);
   const hasOpenAI = Boolean(getProviderApiKey("openai"));
   const hasAnthropic = Boolean(getProviderApiKey("anthropic"));
   const hasOR = Boolean(getProviderApiKey("openrouter"));
+  const hasGoogle = Boolean(getProviderApiKey("google"));
   let candidates = getTaskModels(task);
-  // If only OpenRouter is configured, prepend free models so we do not die on paid-only IDs
-  if (hasOR && !hasOpenAI && !hasAnthropic) {
-    candidates = [...new Set([...OPENROUTER_FREE_CHAT, ...candidates])];
+
+  if (hasGoogle) {
+    candidates = [...new Set([...GOOGLE_CHAT, ...candidates])];
   }
+  if (hasOR && !hasOpenAI && !hasAnthropic) {
+    candidates = [...new Set([...candidates, ...OPENROUTER_FREE_CHAT])];
+  }
+
   let lastError = "No provider is configured";
 
   for (const model of candidates) {
     for (const provider of providersForModel(model)) {
       const providerConfig = getModelConfig().providers[provider];
-      const supported = providerConfig.models.includes("*") || providerConfig.models.includes(nativeModelId(model)) || providerConfig.models.includes(model);
+      const supported =
+        providerConfig.models.includes("*") ||
+        providerConfig.models.includes(nativeModelId(model)) ||
+        providerConfig.models.includes(model) ||
+        (provider === "google" && isGoogleNativeModel(model));
       if (!supported && provider !== "openrouter") continue;
       if (!getProviderApiKey(provider)) {
         lastError = `${providerConfig.apiKeyEnv} is not configured`;
@@ -246,7 +378,8 @@ export async function routeChat(task: TaskType, messages: ChatMessage[]): Promis
           const is429 =
             /\b429\b/.test(lastError) ||
             /rate.?limit/i.test(lastError) ||
-            /too many requests/i.test(lastError);
+            /too many requests/i.test(lastError) ||
+            /resource.?exhausted/i.test(lastError);
           if (is429) {
             await new Promise((resolve) => setTimeout(resolve, 2000 + attempt * 1500));
             break;
@@ -292,7 +425,7 @@ async function openRouterGenerateImage(
       size,
     }),
   });
-  const data = Array.isArray(body.data) ? body.data as Array<{ url?: string; b64_json?: string }> : [];
+  const data = Array.isArray(body.data) ? (body.data as Array<{ url?: string; b64_json?: string }>) : [];
   const first = data[0];
   if (!first?.url && !first?.b64_json) {
     throw new Error(`OpenRouter image API returned no image for model ${model}`);
@@ -351,7 +484,7 @@ export async function generateImage(prompt: string, size = "1024x1024"): Promise
         response_format: "url",
       }),
     });
-    const data = Array.isArray(body.data) ? body.data as Array<{ url?: string; b64_json?: string }> : [];
+    const data = Array.isArray(body.data) ? (body.data as Array<{ url?: string; b64_json?: string }>) : [];
     const first = data[0];
     if (!first?.url && !first?.b64_json) throw new Error("OpenAI image generation returned empty result");
     return { url: first.url, b64: first.b64_json, model: process.env.IMAGE_MODEL ?? "dall-e-3" };
@@ -372,7 +505,7 @@ export async function createEmbedding(input: string): Promise<RoutedEmbeddingRes
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
       body: JSON.stringify({ model: config.defaults.embedModel, input }),
     });
-    const data = Array.isArray(body.data) ? body.data as Array<{ embedding?: unknown }> : [];
+    const data = Array.isArray(body.data) ? (body.data as Array<{ embedding?: unknown }>) : [];
     const embedding = data[0]?.embedding;
     if (!Array.isArray(embedding) || embedding.length !== config.defaults.embedDim) return null;
     return { embedding: embedding.map(Number), model: config.defaults.embedModel };
