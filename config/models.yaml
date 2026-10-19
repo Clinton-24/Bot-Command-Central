@@ -1,5 +1,5 @@
 # Free-only routing — avoids OpenRouter 402 (no credits / max_tokens)
-# Live free IDs checked 2026-10-16. Paid models only as last resort if key has balance.
+# Vision prefers Google Gemini (native multimodal). Live IDs checked 2026-10-19.
 
 taskrouting:
   chat:
@@ -19,43 +19,41 @@ taskrouting:
     primary: "google/gemma-4-26b-a4b-it:free"
     fallbacks:
       - "openrouter/free"
-      - "google/gemma-4-31b-it:free"
       - "nvidia/nemotron-3-super-120b-a12b:free"
     params:
       maxtokens: 800
-      temperature: 0.1
+      temperature: 0.2
   code:
-    primary: "cohere/north-mini-code:free"
+    primary: "openrouter/free"
     fallbacks:
       - "google/gemma-4-26b-a4b-it:free"
-      - "openrouter/free"
-    params:
-      maxtokens: 1024
-      temperature: 0.0
-  math:
-    primary: "google/gemma-4-26b-a4b-it:free"
-    fallbacks:
-      - "openrouter/free"
       - "nvidia/nemotron-3-super-120b-a12b:free"
     params:
-      maxtokens: 512
-      temperature: 0.0
+      maxtokens: 900
+      temperature: 0.1
+  math:
+    primary: "openrouter/free"
+    fallbacks:
+      - "google/gemma-4-26b-a4b-it:free"
+    params:
+      maxtokens: 600
+      temperature: 0
   creative:
     primary: "openrouter/free"
     fallbacks:
-      - "google/gemma-4-31b-it:free"
-      - "liquid/lfm-2.5-2.6b:free"
+      - "google/gemma-4-26b-a4b-it:free"
     params:
-      maxtokens: 600
+      maxtokens: 700
       temperature: 0.7
   vision:
-    primary: "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
+    primary: "gemini-3.8-flash"
     fallbacks:
-      - "nvidia/nemotron-3.5-super-vl:free"
-      - "google/gemma-4-26b-a4b-it:free"
-      - "openrouter/free"
+      - "gemini-2.5-flash"
+      - "gemini-2.0-flash"
+      - "google/gemini-2.0-flash-exp:free"
+      - "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free"
     params:
-      maxtokens: 600
+      maxtokens: 1200
       temperature: 0.2
 
 providers:
@@ -71,10 +69,7 @@ providers:
     apikeyenv: "OPENROUTER_API_KEY"
     baseurl: "https://openrouter.ai/api/v1"
     models: ["*"]
-
-defaults:
-  timeoutseconds: 30
-  maxretries: 1
-  retrybackoffbase: 1.2
-  embedmodel: "text-embedding-3-small"
-  embeddim: 1536
+  google:
+    apikeyenv: "GEMINI_API_KEY"
+    baseurl: "https://generativelanguage.googleapis.com/v1beta"
+    models: ["*"]
