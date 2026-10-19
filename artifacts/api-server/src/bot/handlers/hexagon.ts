@@ -460,6 +460,21 @@ export async function sendDailyDigest(userId: number, bot: MyBot): Promise<void>
   }
 }
 
+export async function logGroupMessage(ctx: BotContext): Promise<void> {
+  try {
+    if (!ctx.chat || ctx.chat.type === "private" || !ctx.from || !ctx.message?.text) return;
+    await db.insert(groupMessagesTable).values({
+      chatId: ctx.chat.id,
+      userId: ctx.from.id,
+      username: ctx.from.username ?? null,
+      firstName: ctx.from.first_name ?? null,
+      message: ctx.message.text.slice(0, 500),
+    });
+  } catch (err) {
+    logger.warn({ err }, "logGroupMessage failed");
+  }
+}
+
 export function registerHexagonHandlers(bot: MyBot): void {
   bot.command("crescent", async (ctx) => {
     if (!(await checkCrescentAccess(ctx))) return;
