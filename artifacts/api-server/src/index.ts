@@ -4,6 +4,7 @@ import { getBotInstance } from "./bot/index";
 import { registerBatteryWebhook } from "./bot/handlers/battery";
 import { webhookCallback } from "grammy";
 import { runMigrations } from "./lib/migrate";
+import { runAutoUpdateAnnounce } from "./lib/auto-updates";
 import { createCryptoBotRouter } from "./bot/handlers/cryptobot";
 import { getKillStatus } from "./bot/handlers/kill";
 import { isGmailOAuthAppConfigured, exchangeCodeAndSave, verifyOAuthState } from "./lib/gmail";
@@ -77,7 +78,7 @@ app.get("/test-ai", async (_req, res) => {
   const models = [
     "openrouter/free",
     "google/gemma-4-26b-a4b-it:free",
-    "openai/gpt-4o-mini",
+    "openai/gpt-oss-120b:free",
   ];
   const results: Record<string, string> = {};
   for (const model of models) {
@@ -90,39 +91,40 @@ app.get("/test-ai", async (_req, res) => {
         },
         body: JSON.stringify({
           model,
-          messages: [{ role: "user", content: "Reply with OK only" }],
+          messages: [{ role: "user", content: "ping" }],
           max_tokens: 8,
         }),
+        signal: AbortSignal.timeout(20_000),
       });
-      const j = (await r.json()) as { choices?: { message?: { content?: string } }[]; error?: { message?: string } };
-      results[model] = r.ok
-        ? (j.choices?.[0]?.message?.content ?? "ok").slice(0, 80)
-        : `ERR ${r.status}: ${j.error?.message ?? r.statusText}`;
+      results[model] = r.ok ? "ok" : `fail ${r.status}`;
     } catch (e) {
-      results[model] = e instanceof Error ? e.message : String(e);
+      results[model] = e instanceof Error ? e.message : "error";
     }
   }
   res.json({ ok: true, results });
 });
 
 app.get("/auth/gmail/callback", async (req, res) => {
+  const code = typeof req.query.code === "string" ? req.query.code : undefined;
+  const state = typeof req.query.state === "string" ? req.query.state : undefined;
+  if (!code || !state) {
+    res.status(400).send("<h2>Missing code/state</h2><p>Try /connect_gmail again.</p>");
+    return;
+  }
   try {
-    const code = typeof req.query.code === "string" ? req.query.code : undefined;
-    const state = typeof req.query.state === "string" ? req.query.state : undefined;
     const userId = verifyOAuthState(state);
-    if (!userId || !code) {
-      res.status(400).send("<h2>Invalid or expired link</h2><p>Go back to Telegram and run /connect_gmail again.</p>");
+    if (!userId) {
+      res.status(400).send("<h2>Invalid or expired state</h2><p>Try /connect_gmail again.</p>");
       return;
     }
-
     const { email } = await exchangeCodeAndSave(userId, code);
-
     try {
       await bot.api.sendMessage(
         userId,
         `✅ Gmail connected\n━━━━━━━━━━━━━━━━━━\n\n` +
-          (email ? `📬 ${email}\n\n` : "") +
-          `Your inbox will appear in:\n• /inbox\n• /digest\n• Daily 10:00 Nairobi briefing\n\n/disconnect_gmail to remove access.`,
+          `${email ? `Account: ${email}\n\n` : ""}` +
+          `Your inbox will appear in:\n• /inbox\n• /digest\n• Daily 10:00 Nairobi briefing\n\n` +
+          `/disconnect_gmail to remove access.`,
       );
     } catch (notifyErr) {
       logger.warn({ notifyErr, userId }, "Could not notify user after Gmail connect");
@@ -202,4 +204,11 @@ app.listen(port, async (err?: Error) => {
   }
 
   startKeepAlive();
+
+  // Notify users about new commits since last deploy
+  try {
+    await runAutoUpdateAnnounce(bot);
+  } catch (err) {
+    logger.warn({ err }, "auto-update announce failed");
+  }
 });
