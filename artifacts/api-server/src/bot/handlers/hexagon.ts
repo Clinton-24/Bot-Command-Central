@@ -34,6 +34,7 @@ import type { TaskType } from "../../lib/model-config";
 const inFlightUpdates = new Set<string>();
 const recentlyHandled = new Map<string, number>();
 const DEDUPE_TTL_MS = 120_000;
+const userInFlight = new Set<number>();
 
 function claimUpdate(key: string): boolean {
   const now = Date.now();
@@ -313,7 +314,7 @@ export async function handleHexagonMessage(
   imageUrl?: string,
 ): Promise<void> {
   const userId = ctx.from!.id;
-  const trimmed = (input || "").trim();
+  let trimmed = (input || "").trim();
   const cmd = trimmed.split(/\s+/)[0]?.toLowerCase() ?? "";
   if (cmd === "/exit" || cmd.startsWith("/exit@")) {
     disableCrescentChat(ctx);
@@ -322,20 +323,30 @@ export async function handleHexagonMessage(
   }
   if (!(await checkCrescentAccess(ctx))) return;
 
+  if (userInFlight.has(userId)) {
+    await ctx.reply("⏳ Still working on your previous message — one moment.").catch(() => {});
+    return;
+  }
+
   const updateId = ctx.update?.update_id;
   const msgId = ctx.message?.message_id ?? ctx.callbackQuery?.message?.message_id;
   const dedupeKey =
     updateId != null
       ? `u:${updateId}`
-      : `m:${ctx.chat?.id ?? 0}:${msgId ?? 0}:${imageUrl ? "img" : "txt"}:${input.slice(0, 40)}`;
+      : `m:${ctx.chat?.id ?? 0}:${msgId ?? 0}:${imageUrl ? "img" : "txt"}`;
   if (!claimUpdate(dedupeKey)) {
     logger.info({ dedupeKey, userId }, "Skipping duplicate Crescent request");
     return;
   }
 
+  const MAX_INPUT = 6000;
+  if (trimmed.length > MAX_INPUT) {
+    trimmed = trimmed.slice(0, MAX_INPUT) + "\n\n[…truncated — message was very long]";
+  }
+
+  userInFlight.add(userId);
   enableCrescentChat(ctx);
   let thinkingId: number | undefined;
-  let ok = false;
   try {
     await ctx.replyWithChatAction(imageUrl ? "upload_photo" : "typing").catch(() => {});
     const thinking = await ctx.reply(
@@ -349,20 +360,31 @@ export async function handleHexagonMessage(
       await ctx.reply(
         `⚠️ Quota exceeded\n\n${formatCrescentQuota(consumed)}\n\nResets at midnight Nairobi time.`,
       );
-      ok = true;
       return;
     }
     const task: TaskType = imageUrl ? "vision" : "chat";
-    const { reply } = await askHexagon(userId, input, ctx, task, imageUrl);
+    const { reply } = await askHexagon(userId, trimmed, ctx, task, imageUrl);
     if (thinkingId) await ctx.api.deleteMessage(ctx.chat!.id, thinkingId).catch(() => {});
     const body = `🤖 CRESCENT\n━━━━━━━━━━━━━━━━━━\n\n${reply}`;
-    try {
-      if (imageUrl) await ctx.reply(body);
-      else await ctx.reply(body, { parse_mode: "Markdown" }).catch(() => ctx.reply(body));
-    } catch {
-      await ctx.reply(body);
+    const chunks: string[] = [];
+    const LIMIT = 3900;
+    if (body.length <= LIMIT) chunks.push(body);
+    else {
+      let rest = body;
+      while (rest.length > 0) {
+        chunks.push(rest.slice(0, LIMIT));
+        rest = rest.slice(LIMIT);
+      }
     }
-    ok = true;
+    for (let i = 0; i < chunks.length; i++) {
+      const part = chunks[i]!;
+      try {
+        if (imageUrl || i > 0) await ctx.reply(part);
+        else await ctx.reply(part, { parse_mode: "Markdown" }).catch(() => ctx.reply(part));
+      } catch {
+        await ctx.reply(part).catch(() => {});
+      }
+    }
   } catch (err) {
     logger.error({ err, userId }, "handleHexagonMessage failed");
     if (thinkingId) await ctx.api.deleteMessage(ctx.chat!.id, thinkingId).catch(() => {});
@@ -370,7 +392,8 @@ export async function handleHexagonMessage(
       `❌ Crescent error\n\n${err instanceof Error ? err.message : "Unknown error"}`,
     );
   } finally {
-    releaseUpdate(dedupeKey, ok);
+    releaseUpdate(dedupeKey, true);
+    userInFlight.delete(userId);
   }
 }
 
@@ -506,6 +529,7 @@ export function registerHexagonHandlers(bot: MyBot): void {
     await ctx.reply("👋 Left Crescent chat mode.");
   });
 
+  // Text chat is handled in menu.ts to avoid double replies.
   bot.on("message:text", async (ctx, next) => {
     if (ctx.chat?.type !== "private") return next();
     if (!ctx.from) return next();
@@ -517,19 +541,13 @@ export function registerHexagonHandlers(bot: MyBot): void {
       await runImagine(ctx, text);
       return;
     }
-
-    const inCrescent =
-      ctx.session.crescentMode === true || ctx.session.pendingAction === "hexagon:input";
-    if (!inCrescent) return next();
-
-    await handleHexagonMessage(ctx, text);
+    return next();
   });
 
   bot.on("message:photo", async (ctx, next) => {
     if (ctx.chat?.type !== "private") return next();
     if (!ctx.from) return next();
 
-    // Always analyse private photos with Crescent (no need to /crescent first)
     const pending = ctx.session.pendingAction ?? "";
     if (
       pending &&
