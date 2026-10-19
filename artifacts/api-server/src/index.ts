@@ -1,6 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { getBotInstance } from "./bot/index";
+import { webhookCallback } from "grammy";
 import { registerBatteryWebhook } from "./bot/handlers/battery";
 import { runMigrations } from "./lib/migrate";
 import { runAutoUpdateAnnounce } from "./lib/auto-updates";
@@ -17,15 +18,17 @@ const port = Number(rawPort);
 const bot = getBotInstance();
 registerBatteryWebhook(app, bot);
 
-// Early ACK: long Crescent replies can exceed Telegram's ~60s webhook timeout.
-// If we wait until AI finishes, Telegram retries and Crescent replies 2–3 times.
-app.post("/bot", (req: Request, res: Response) => {
-  res.status(200).json({ ok: true });
-  const update = req.body;
-  if (!update || typeof update !== "object") return;
-  void bot.handleUpdate(update).catch((err) => {
-    logger.error({ err }, "webhook handleUpdate failed");
-  });
+// Standard Grammy webhook (reliable on Render). Deduping in Crescent prevents double replies.
+const handleUpdate = webhookCallback(bot, "express");
+app.post("/bot", async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    await handleUpdate(req, res, next);
+  } catch (err) {
+    logger.error({ err }, "webhook handler crashed");
+    if (!res.headersSent) {
+      res.status(200).json({ ok: true });
+    }
+  }
 });
 
 app.use("/api", createCryptoBotRouter(bot));
