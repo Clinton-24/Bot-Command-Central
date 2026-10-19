@@ -54,7 +54,6 @@ function releaseUpdate(key: string, success: boolean): void {
 let shopContextCache: { at: number; text: string } | null = null;
 const SHOP_CACHE_MS = 10_000;
 
-/** Call after product/bank-log changes so Crescent sees live inventory immediately. */
 export function invalidateShopContext(): void {
   shopContextCache = null;
 }
@@ -529,7 +528,6 @@ export function registerHexagonHandlers(bot: MyBot): void {
     await ctx.reply("👋 Left Crescent chat mode.");
   });
 
-  // Text chat is handled in menu.ts to avoid double replies.
   bot.on("message:text", async (ctx, next) => {
     if (ctx.chat?.type !== "private") return next();
     if (!ctx.from) return next();
@@ -560,7 +558,18 @@ export function registerHexagonHandlers(bot: MyBot): void {
 
     const photos = ctx.message.photo;
     if (!photos?.length) return next();
-    const best = photos[photos.length - 1]!;
+    let best = photos[photos.length - 1]!;
+    for (let i = photos.length - 1; i >= 0; i--) {
+      const p = photos[i]!;
+      if ((p.file_size ?? 0) > 0 && (p.file_size ?? 0) <= 1_500_000) {
+        best = p;
+        break;
+      }
+      if ((p.width ?? 0) > 0 && (p.width ?? 0) <= 1280) {
+        best = p;
+        break;
+      }
+    }
 
     enableCrescentChat(ctx);
 
@@ -569,7 +578,7 @@ export function registerHexagonHandlers(bot: MyBot): void {
       const dataUrl = await telegramPhotoDataUrl(bot, best.file_id);
       const caption =
         ctx.message.caption?.trim() ||
-        "Describe this image and extract any visible text once. If there is readable text, transcribe it exactly once.";
+        "You can see this image. Describe it briefly and extract all visible text exactly once. Never say you cannot see images.";
       await handleHexagonMessage(ctx, caption, dataUrl);
     } catch (err) {
       logger.error({ err }, "photo vision failed");
