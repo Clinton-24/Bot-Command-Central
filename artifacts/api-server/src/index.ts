@@ -2,7 +2,6 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { getBotInstance } from "./bot/index";
 import { registerBatteryWebhook } from "./bot/handlers/battery";
-import { webhookCallback } from "grammy";
 import { runMigrations } from "./lib/migrate";
 import { runAutoUpdateAnnounce } from "./lib/auto-updates";
 import { createCryptoBotRouter } from "./bot/handlers/cryptobot";
@@ -18,16 +17,15 @@ const port = Number(rawPort);
 const bot = getBotInstance();
 registerBatteryWebhook(app, bot);
 
-const handleUpdate = webhookCallback(bot, "express");
-app.post("/bot", async (req: Request, res: Response, next: NextFunction) => {
-  try {
-    await handleUpdate(req, res, next);
-  } catch (err) {
-    logger.error({ err }, "webhook handler crashed");
-    if (!res.headersSent) {
-      res.status(200).json({ ok: true });
-    }
-  }
+// Early ACK: long Crescent replies can exceed Telegram's ~60s webhook timeout.
+// If we wait until AI finishes, Telegram retries and Crescent replies 2–3 times.
+app.post("/bot", (req: Request, res: Response) => {
+  res.status(200).json({ ok: true });
+  const update = req.body;
+  if (!update || typeof update !== "object") return;
+  void bot.handleUpdate(update).catch((err) => {
+    logger.error({ err }, "webhook handleUpdate failed");
+  });
 });
 
 app.use("/api", createCryptoBotRouter(bot));
@@ -205,7 +203,6 @@ app.listen(port, async (err?: Error) => {
 
   startKeepAlive();
 
-  // Notify users about new commits since last deploy
   try {
     await runAutoUpdateAnnounce(bot);
   } catch (err) {
