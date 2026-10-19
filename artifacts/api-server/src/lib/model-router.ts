@@ -564,31 +564,49 @@ export async function generateImage(prompt: string, size = "1024x1024"): Promise
     errors.push("OPENAI_API_KEY not set");
   }
 
-  // 4) Pollinations free fallback (no key) — caption has no provider label
-  try {
+  // 4) Pollinations — free but rate-limits after a few images (HTTP 402)
+  {
     const dims = size.split("x").map((n) => parseInt(n, 10));
-    const w = Number.isFinite(dims[0]) ? dims[0]! : 1024;
-    const h = Number.isFinite(dims[1]) ? dims[1]! : 1024;
-    const encoded = encodeURIComponent(prompt.slice(0, 400));
-    const url =
-      `https://image.pollinations.ai/prompt/${encoded}` +
-      `?width=${Math.min(w, 1280)}&height=${Math.min(h, 1280)}&nologo=true&enhance=true`;
-    const probe = await fetch(url, { method: "GET", signal: AbortSignal.timeout(25_000) });
-    if (!probe.ok) {
-      throw new Error(`Pollinations HTTP ${probe.status}`);
+    const w = Number.isFinite(dims[0]) ? Math.min(dims[0]!, 1024) : 1024;
+    const h = Number.isFinite(dims[1]) ? Math.min(dims[1]!, 1024) : 1024;
+    const encoded = encodeURIComponent(prompt.slice(0, 300));
+    const seed = Math.floor(Math.random() * 1_000_000);
+    const candidates = [
+      `https://image.pollinations.ai/prompt/${encoded}?width=${w}&height=${h}&nologo=true&seed=${seed}`,
+      `https://image.pollinations.ai/prompt/${encoded}?width=${w}&height=${h}&nologo=true&model=flux&seed=${seed}`,
+    ];
+    let pollErr = "unknown";
+    for (let i = 0; i < candidates.length; i++) {
+      const url = candidates[i]!;
+      try {
+        if (i > 0) await new Promise((r) => setTimeout(r, 2500));
+        const probe = await fetch(url, { method: "GET", signal: AbortSignal.timeout(30_000) });
+        if (probe.status === 402 || probe.status === 429) {
+          pollErr = `rate limited (HTTP ${probe.status}) — free anonymous quota used up for now`;
+          continue;
+        }
+        if (!probe.ok) {
+          pollErr = `HTTP ${probe.status}`;
+          continue;
+        }
+        logger.info({ provider: "pollinations" }, "Image generated via free Pollinations fallback");
+        return { url, model: "" };
+      } catch (err) {
+        pollErr = err instanceof Error ? err.message : "pollinations failed";
+      }
     }
-    logger.info({ provider: "pollinations" }, "Image generated via free Pollinations fallback");
-    return { url, model: "" };
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : "pollinations failed";
-    errors.push(`Pollinations: ${msg}`);
-    logger.warn({ err: msg }, "Pollinations free image fallback failed");
+    errors.push(`Pollinations: ${pollErr}`);
+    logger.warn({ err: pollErr }, "Pollinations free image fallback failed");
   }
 
+  const needsCf = !hasCloudflare;
   throw new Error(
     "Image generation failed on all providers.\n" +
-      "• Set CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN for free FLUX.1 Schnell\n" +
-      "• Or OPENAI_API_KEY for DALL·E / OpenRouter credits for other models\n" +
+      (needsCf
+        ? "• FREE sustained images: set CLOUDFLARE_ACCOUNT_ID + CLOUDFLARE_API_TOKEN on Render (FLUX.1 Schnell)\n"
+        : "• Cloudflare Flux failed — check token permissions (Workers AI)\n") +
+      "• Pollinations free tier is tiny and returns 402 after a few images\n" +
+      "• Paid options: OPENAI_API_KEY (DALL·E) or OpenRouter credits\n" +
       `Details: ${errors.slice(0, 4).join(" | ")}`,
   );
 }
