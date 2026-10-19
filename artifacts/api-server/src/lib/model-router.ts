@@ -493,7 +493,7 @@ export async function generateImage(prompt: string, size = "1024x1024"): Promise
     errors.push("OPENAI_API_KEY not set");
   }
 
-  // Free fallback — Pollinations (no API key required)
+  // Free fallback — Pollinations (no API key required). Caption shows prompt only — no provider label.
   try {
     const dims = size.split("x").map((n) => parseInt(n, 10));
     const w = Number.isFinite(dims[0]) ? dims[0]! : 1024;
@@ -507,7 +507,7 @@ export async function generateImage(prompt: string, size = "1024x1024"): Promise
       throw new Error(`Pollinations HTTP ${probe.status}`);
     }
     logger.info({ provider: "pollinations" }, "Image generated via free Pollinations fallback");
-    return { url, model: "pollinations.ai (free)" };
+    return { url, model: "" };
   } catch (err) {
     const msg = err instanceof Error ? err.message : "pollinations failed";
     errors.push(`Pollinations: ${msg}`);
