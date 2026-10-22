@@ -55,7 +55,8 @@ export function isGmailConfigured(): boolean {
 function redirectUri(): string {
   const base = (process.env.RENDER_EXTERNAL_URL ?? "").replace(/\/$/, "");
   if (!base) throw new Error("RENDER_EXTERNAL_URL is required for Gmail OAuth");
-  return `${base}/oauth/google/callback`;
+  // Must match Express routes in index.ts (both paths accepted)
+  return `${base}/auth/gmail/callback`;
 }
 
 function signState(userId: number): string {
@@ -135,7 +136,7 @@ async function getRefreshTokenForUser(userId: number): Promise<string | null> {
   return null;
 }
 
-async function getAccessToken(refreshToken: string): Promise<string> {
+async function getAccessToken(refreshToken: string, userId?: number): Promise<string> {
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -152,7 +153,24 @@ async function getAccessToken(refreshToken: string): Promise<string> {
     error_description?: string;
   };
   if (!res.ok || !body.access_token) {
-    throw new Error(body.error_description ?? body.error ?? `Gmail token refresh failed (${res.status})`);
+    const detail = body.error_description ?? body.error ?? `Gmail token refresh failed (${res.status})`;
+    const revoked =
+      body.error === "invalid_grant" ||
+      /expired|revoked|invalid_grant/i.test(detail);
+    if (revoked && userId) {
+      try {
+        await pool.query(`DELETE FROM user_gmail_tokens WHERE user_id = $1`, [userId]);
+        logger.warn({ userId }, "Cleared expired/revoked Gmail refresh token");
+      } catch (err) {
+        logger.warn({ err, userId }, "Failed to clear revoked Gmail token");
+      }
+    }
+    if (revoked) {
+      throw new Error(
+        "Gmail access expired or was revoked. Run /connect_gmail again to reconnect (use the same Google account and allow access).",
+      );
+    }
+    throw new Error(detail);
   }
   return body.access_token;
 }
@@ -256,7 +274,7 @@ export async function fetchRecentEmailsForUser(
     throw new Error("Gmail not connected. Use /connect_gmail to link your inbox.");
   }
 
-  const token = await getAccessToken(refresh);
+  const token = await getAccessToken(refresh, userId);
   const maxResults = options?.maxResults ?? 25;
   const q = options?.query ?? "in:inbox newer_than:2d -category:promotions -category:social";
 
