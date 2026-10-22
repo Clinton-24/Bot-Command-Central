@@ -47,7 +47,7 @@ export function registerWelcomeHandler(bot: MyBot): void {
     }
   });
 
-  bot.command("start", async (ctx) => {
+  const runWelcome = async (ctx: BotContext) => {
     const from = ctx.from;
     if (!from) return;
 
@@ -67,7 +67,7 @@ export function registerWelcomeHandler(bot: MyBot): void {
           },
         });
     } catch (err) {
-      logger.warn({ err }, "start user upsert failed");
+      logger.warn({ err }, "welcome user upsert failed");
     }
 
     const owner = isOwner(from.id);
@@ -78,7 +78,7 @@ export function registerWelcomeHandler(bot: MyBot): void {
         await handleInviteCode(bot, ctx, payload);
         return;
       } catch {
-        /* fall through to normal start */
+        /* fall through to normal welcome */
       }
     }
 
@@ -107,7 +107,12 @@ export function registerWelcomeHandler(bot: MyBot): void {
       parse_mode: "Markdown",
       reply_markup: growthWelcomeKeyboard(owner),
     });
-  });
+  };
+
+  // Primary welcome command
+  bot.command("sharp", runWelcome);
+  // Keep /start for Telegram deep links (invite / referral payloads)
+  bot.command("start", runWelcome);
 
   bot.command("invite", async (ctx) => {
     const from = ctx.from;
@@ -118,53 +123,7 @@ export function registerWelcomeHandler(bot: MyBot): void {
         `${link}\n\n` +
         `• Friends get free access + Crescent AI\n` +
         `• You get +5 Crescent bonus per join\n` +
-        `Unlimited invites.`,
-      {
-        reply_markup: new InlineKeyboard()
-          .url("Share link", `https://t.me/share/url?url=${encodeURIComponent(link)}`)
-          .row()
-          .text("🏠 Main Menu", "menu:main"),
-      },
-    );
-  });
-
-  bot.callbackQuery("growth:invite", async (ctx) => {
-    await ctx.answerCallbackQuery();
-    const from = ctx.from;
-    if (!from) return;
-    const link = referralLink(from.id);
-    await ctx.reply(
-      `🔗 Your invite link\n\n${link}\n\nFriends get free access. You get +5 Crescent bonus per join.`,
-      {
-        reply_markup: new InlineKeyboard()
-          .url("Share", `https://t.me/share/url?url=${encodeURIComponent(link)}`)
-          .row()
-          .text("🏠 Menu", "menu:main"),
-      },
-    );
-  });
-
-  bot.callbackQuery("growth:try_crescent", async (ctx) => {
-    await ctx.answerCallbackQuery();
-    if (!isOwner(ctx.from!.id)) {
-      await ensureAutoFreeAccess({
-        id: ctx.from!.id,
-        username: ctx.from!.username,
-        firstName: ctx.from!.first_name,
-      }).catch(() => {});
-    }
-    ctx.session.crescentMode = true;
-    ctx.session.pendingAction = "hexagon:input";
-    await ctx.reply(
-      `🤖 CRESCENT AI\n━━━━━━━━━━━━━━━━━━\n\nChat mode is on. Send a message.\n\n` +
-        `• /exit — leave chat mode\n` +
-        `• /briefing — daily briefing\n` +
-        (isOwner(ctx.from!.id) ? "" : "• /invite — earn bonus queries"),
-      {
-        reply_markup: new InlineKeyboard()
-          .text("🏠 Main Menu", "menu:main")
-          .text("🚪 Exit chat", "crescent:exit"),
-      },
+        `Share the link or use /menu after they join.`,
     );
   });
 
@@ -174,89 +133,63 @@ export function registerWelcomeHandler(bot: MyBot): void {
 
   bot.command("ping", async (ctx) => {
     const start = Date.now();
-    const msg = await ctx.reply("🏓 Pinging...");
+    const msg = await ctx.reply("🏓 pong");
     const elapsed = Date.now() - start;
-    await ctx.api.editMessageText(
-      ctx.chat.id,
-      msg.message_id,
-      `🏓 Pong!\n━━━━━━━━━━━━━━━━━━\n⚡ Response: ${elapsed}ms\n✅ Bot is online`,
-    );
+    await ctx.api
+      .editMessageText(ctx.chat!.id, msg.message_id, `🏓 pong — ${elapsed}ms`)
+      .catch(() => {});
   });
 
   bot.command("id", async (ctx) => {
     const from = ctx.from;
     if (!from) return;
-    const chatType = ctx.chat.type;
-    const isGroup = chatType === "group" || chatType === "supergroup";
     await ctx.reply(
-      `🪪 Your Info\n━━━━━━━━━━━━━━━━━━\n` +
-        `👤 Name: ${from.first_name}${from.last_name ? ` ${from.last_name}` : ""}\n` +
-        `🆔 User ID: ${from.id}\n` +
-        (from.username ? `📛 Username: @${from.username}\n` : "") +
-        (isGroup
-          ? `\n💬 Chat ID: ${ctx.chat.id}\n📂 Chat: ${(ctx.chat as { title?: string }).title ?? "Group"}`
-          : ""),
+      `🆔 Your ID: \`${from.id}\`\n` +
+        (from.username ? `Username: @${from.username}\n` : "") +
+        `Chat: \`${ctx.chat?.id}\``,
+      { parse_mode: "Markdown" },
     );
   });
 
   bot.command("report", async (ctx) => {
-    const from = ctx.from;
-    if (!from) return;
-    const reason = (ctx.match as string | undefined)?.trim() ?? "";
+    const reason = (ctx.match as string | undefined)?.trim();
     if (!reason) {
       await ctx.reply("Usage: /report <reason>");
       return;
     }
-    const ownerId = parseInt(process.env.BOT_OWNER_ID ?? "0");
+    const ownerId = parseInt(process.env["BOT_OWNER_ID"] ?? "0", 10);
     if (!ownerId) {
-      await ctx.reply("Report received. Owner will review.");
+      await ctx.reply("Report channel not configured.");
       return;
     }
+    const from = ctx.from!;
     try {
       await bot.api.sendMessage(
         ownerId,
-        `🚨 REPORT\n━━━━━━━━━━━━━━━━━━\n\n` +
-          `From: ${from.first_name} (${from.id})\n` +
-          (from.username ? `@${from.username}\n` : "") +
-          `\n${reason}`,
+        `📣 REPORT\n━━━━━━━━━━━━━━━━━━\n\nFrom: ${from.first_name ?? ""} (@${from.username ?? "n/a"})\nID: ${from.id}\n\n${reason}`,
       );
-      await ctx.reply("✅ Report sent to admin.");
+      await ctx.reply("✅ Report sent to the owner.");
     } catch (err) {
       logger.error({ err }, "report failed");
-      await ctx.reply("❌ Failed to send report. Please try again.");
+      await ctx.reply("❌ Could not deliver report.");
     }
   });
 
   bot.command("help", async (ctx) => {
-    const owner = ctx.from ? isOwner(ctx.from.id) : false;
     await ctx.reply(
-      `⚡ CRESCENT — COMMANDS\n` +
-        `━━━━━━━━━━━━━━━━━━\n\n` +
-        `🤖 CRESCENT AI\n` +
-        `/crescent — Chat with Crescent\n` +
-        `/briefing — Daily briefing\n` +
-        `/imagine <prompt> — Generate image\n` +
-        `/exit — Leave chat mode\n` +
-        (owner ? "" : `/invite — Referral link (+5 bonus)\n`) +
-        `\n🛒 SHOP\n` +
-        `/shop · /buy — Open CardShop\n` +
-        `/orders · /myorders — Your orders\n` +
-        `\n⏰ REMINDERS\n` +
+      `📖 HELP\n━━━━━━━━━━━━━━━━━━\n\n` +
+        `🚀 /sharp — Welcome\n` +
+        `/menu — Main menu\n\n` +
+        `🤖 CRESCENT\n` +
+        `/crescent · /imagine · /briefing · /exit\n\n` +
+        `🛒 SHOP\n` +
+        `/orders · /myorders — Your orders\n\n` +
+        `⏰ REMINDERS\n` +
         `/remind <time> <msg> · /reminders · /digest\n` +
-        `/connect_gmail · /inbox\n` +
-        `\n🩺 STATUS\n` +
+        `/connect_gmail · /inbox\n\n` +
+        `🩺 STATUS\n` +
         `/health · /ping · /id · /menu\n` +
-        `/report <reason> — Report to admin\n` +
-        `\n💳 TIERS\n` +
-        `/subscribe · /plans — Premium / VIP\n` +
-        (owner
-          ? `\n📢 OWNER\n/broadcast · /stats · /kill · /unkill\n/hex · /access · /online\n`
-          : ""),
-      {
-        reply_markup: new InlineKeyboard()
-          .text("🤖 Try Crescent", "growth:try_crescent")
-          .text("🏠 Main Menu", "menu:main"),
-      },
+        `/report <reason> — Report to admin\n`,
     );
   });
 }
