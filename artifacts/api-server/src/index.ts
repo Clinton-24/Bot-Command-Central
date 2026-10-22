@@ -105,7 +105,7 @@ app.get("/test-ai", async (_req, res) => {
   res.json({ ok: true, results });
 });
 
-app.get("/auth/gmail/callback", async (req, res) => {
+const handleGmailCallback = async (req: Request, res: Response) => {
   const code = typeof req.query.code === "string" ? req.query.code : undefined;
   const state = typeof req.query.state === "string" ? req.query.state : undefined;
   if (!code || !state) {
@@ -149,7 +149,10 @@ app.get("/auth/gmail/callback", async (req, res) => {
           `<p>Try /connect_gmail again in Telegram.</p>`,
       );
   }
-});
+};
+
+app.get("/auth/gmail/callback", handleGmailCallback);
+app.get("/oauth/google/callback", handleGmailCallback);
 
 function startKeepAlive(): void {
   const renderUrl = process.env.RENDER_EXTERNAL_URL?.replace(/\/$/, "");
