@@ -151,14 +151,16 @@ function googleModelId(model: string): string {
   if (id.includes("gemini-3.8-flash")) return "gemini-3.8-flash";
   if (id.includes("gemini-3.6-flash")) return "gemini-3.6-flash";
   if (id.includes("gemini-3.5-flash-lite")) return "gemini-3.5-flash-lite";
-  if (id.includes("gemini-2.5-pro")) return "gemini-2.5-pro";
-  if (id.includes("gemini-2.5-flash")) return "gemini-2.5-flash";
-  if (id.includes("gemini-2.0-flash-lite")) return "gemini-2.0-flash-lite";
-  if (id.includes("gemini-2.0-flash")) return "gemini-2.0-flash";
-  if (id.includes("gemini-1.5-flash")) return "gemini-1.5-flash";
-  if (id.includes("gemini-1.5-pro")) return "gemini-1.5-pro";
+  if (id.includes("gemini-3.1-flash-lite")) return "gemini-3.1-flash-lite";
+  if (id.includes("gemini-2.5-pro")) return "gemini-3.8-flash";
+  // Map retired/restricted 2.x IDs to current free 3.x (new keys often 404 on 2.5)
+  if (id.includes("gemini-2.5-flash")) return "gemini-3.8-flash";
+  if (id.includes("gemini-2.0-flash-lite")) return "gemini-3.5-flash-lite";
+  if (id.includes("gemini-2.0-flash")) return "gemini-3.8-flash";
+  if (id.includes("gemini-1.5-flash")) return "gemini-3.5-flash-lite";
+  if (id.includes("gemini-1.5-pro")) return "gemini-3.8-flash";
   if (id.startsWith("gemini-")) return id;
-  return "gemini-2.5-flash";
+  return "gemini-3.8-flash";
 }
 
 async function callGoogle(
@@ -342,7 +344,7 @@ const OPENROUTER_FREE_CHAT = [
   "nvidia/nemotron-nano-9b-v2:free",
 ];
 
-const GOOGLE_CHAT = [process.env.CRESCENT_CHAT_MODEL?.trim() || "gemini-2.5-flash", "gemini-2.0-flash"].filter((m, i, a) => m && a.indexOf(m) === i);
+const GOOGLE_CHAT = [process.env.CRESCENT_CHAT_MODEL?.trim() || "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash"].filter((m, i, a) => m && a.indexOf(m) === i);
 
 function messagesHaveImage(messages: ChatMessage[]): boolean {
   for (const message of messages) {
@@ -356,9 +358,9 @@ function messagesHaveImage(messages: ChatMessage[]): boolean {
 }
 
 const VISION_MODELS = [
-  "gemini-2.5-flash",
-  "gemini-2.0-flash",
-  "google/gemini-2.0-flash-exp:free",
+  "gemini-3.8-flash",
+  "gemini-3.5-flash-lite",
+  "gemini-3.6-flash",
 ];
 
 function isHardFail(err: string): boolean {
@@ -384,20 +386,22 @@ export async function routeChat(task: TaskType, messages: ChatMessage[]): Promis
   let candidates = getTaskModels(task);
 
   if (hasImage) {
+    // Latest free Gemini 3.x only — 2.x often 404 on new AI Studio keys
     candidates = hasGoogle
-      ? [process.env.CRESCENT_CHAT_MODEL?.trim() || "gemini-2.5-flash", "gemini-2.0-flash"]
+      ? [process.env.CRESCENT_CHAT_MODEL?.trim() || "gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash"]
       : hasOR
         ? ["google/gemini-2.0-flash-exp:free"]
-        : ["gemini-2.5-flash", "gemini-2.0-flash"];
+        : ["gemini-3.8-flash", "gemini-3.5-flash-lite"];
   } else if (hasGoogle) {
-    candidates = GOOGLE_CHAT.slice(0, 2);
+    candidates = GOOGLE_CHAT.slice(0, 3);
   } else if (hasOR && !hasOpenAI && !hasAnthropic) {
     candidates = [...new Set([...getTaskModels(task).slice(0, 2), ...OPENROUTER_FREE_CHAT.slice(0, 1)])];
   } else {
-    candidates = getTaskModels(task).slice(0, 2);
+    candidates = getTaskModels(task).slice(0, 3);
   }
 
-  candidates = [...new Set(candidates)].slice(0, 2);
+  // Prefer quality model first, then high-quota Flash-Lite, then 3.6
+  candidates = [...new Set(candidates)].slice(0, 3);
 
   let lastError = "No provider is configured";
 
