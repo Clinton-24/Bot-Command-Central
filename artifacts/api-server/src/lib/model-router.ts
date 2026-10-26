@@ -113,7 +113,8 @@ async function requestJson(
   url: string,
   init: RequestInit,
 ): Promise<Record<string, unknown>> {
-  const timeoutMs = getModelConfig().defaults.timeoutSeconds * 1000;
+  // Cap per-request wait so a dead model does not stall Crescent for a full minute
+  const timeoutMs = Math.min(getModelConfig().defaults.timeoutSeconds * 1000, 25_000);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -342,7 +343,8 @@ const OPENROUTER_FREE_CHAT = [
   "nvidia/nemotron-nano-9b-v2:free",
 ];
 
-const GOOGLE_CHAT = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-2.5-flash", "gemini-2.0-flash"];
+/** Fast Gemini path — keep short so one dead model does not burn 60s×N */
+const GOOGLE_CHAT = ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"];
 
 function messagesHaveImage(messages: ChatMessage[]): boolean {
   for (const message of messages) {
@@ -359,11 +361,21 @@ const VISION_MODELS = [
   "gemini-3.8-flash",
   "gemini-3.6-flash",
   "gemini-3.5-flash-lite",
-  "gemini-2.5-flash",
-  "gemini-2.0-flash",
   "google/gemini-2.0-flash-exp:free",
-  "google/gemini-2.5-flash-preview:free",
 ];
+
+function isHardFail(err: string): boolean {
+  return (
+    /\b404\b/.test(err) ||
+    /not found/i.test(err) ||
+    /not a valid model/i.test(err) ||
+    /invalid.?model/i.test(err) ||
+    /is not configured/i.test(err) ||
+    /\b401\b/.test(err) ||
+    /\b403\b/.test(err) ||
+    /API key/i.test(err)
+  );
+}
 
 export async function routeChat(task: TaskType, messages: ChatMessage[]): Promise<RoutedChatResponse> {
   const route = getTaskRoute(task);
@@ -375,18 +387,24 @@ export async function routeChat(task: TaskType, messages: ChatMessage[]): Promis
   let candidates = getTaskModels(task);
 
   if (hasImage) {
-    candidates = [...VISION_MODELS];
-    if (hasGoogle) {
-      candidates = [...new Set([...VISION_MODELS.filter((m) => m.startsWith("gemini-")), ...candidates])];
-    }
+    // Vision: Gemini first only (2–3 models). No long free-model cascade.
+    candidates = hasGoogle
+      ? ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash-lite"]
+      : hasOR
+        ? ["google/gemini-2.0-flash-exp:free"]
+        : [...VISION_MODELS];
+  } else if (hasGoogle) {
+    // Chat with Gemini key: try fast Gemini first, then at most 2 YAML/OpenRouter fallbacks
+    const yaml = getTaskModels(task).filter((m) => !m.startsWith("gemini-")).slice(0, 2);
+    candidates = [...GOOGLE_CHAT, ...yaml];
+  } else if (hasOR && !hasOpenAI && !hasAnthropic) {
+    candidates = [...new Set([...getTaskModels(task).slice(0, 3), ...OPENROUTER_FREE_CHAT.slice(0, 2)])];
   } else {
-    if (hasGoogle) {
-      candidates = [...new Set([...GOOGLE_CHAT, ...candidates])];
-    }
-    if (hasOR && !hasOpenAI && !hasAnthropic) {
-      candidates = [...new Set([...candidates, ...OPENROUTER_FREE_CHAT])];
-    }
+    candidates = getTaskModels(task).slice(0, 4);
   }
+
+  // Cap cascade so worst-case stays under ~45s with 20s per attempt
+  candidates = [...new Set(candidates)].slice(0, 5);
 
   let lastError = "No provider is configured";
 
@@ -403,25 +421,34 @@ export async function routeChat(task: TaskType, messages: ChatMessage[]): Promis
         lastError = `${providerConfig.apiKeyEnv} is not configured`;
         continue;
       }
-      for (let attempt = 0; attempt <= getModelConfig().defaults.maxRetries; attempt++) {
+      // One try per model unless rate-limited (retries only help for 429)
+      const maxAttempts = 1;
+      for (let attempt = 0; attempt <= maxAttempts; attempt++) {
         try {
-          const reply = await callProvider(provider, model, messages, route.params.maxTokens, route.params.temperature);
+          const reply = await callProvider(
+            provider,
+            model,
+            messages,
+            Math.min(route.params.maxTokens, 800),
+            route.params.temperature,
+          );
           logger.info({ task, model, provider }, "AI model responded");
           return { reply, model, provider, task };
         } catch (err) {
           lastError = err instanceof Error ? err.message : "provider request failed";
           logger.warn({ task, model, provider, attempt, err: lastError }, "AI provider attempt failed");
+          if (isHardFail(lastError)) break; // next model immediately
           const is429 =
             /\b429\b/.test(lastError) ||
             /rate.?limit/i.test(lastError) ||
             /too many requests/i.test(lastError) ||
             /resource.?exhausted/i.test(lastError);
           if (is429) {
-            await new Promise((resolve) => setTimeout(resolve, 2000 + attempt * 1500));
+            await new Promise((resolve) => setTimeout(resolve, 800 + attempt * 400));
             break;
           }
-          if (attempt < getModelConfig().defaults.maxRetries) {
-            await new Promise((resolve) => setTimeout(resolve, backoffMs(attempt)));
+          if (attempt < maxAttempts) {
+            await new Promise((resolve) => setTimeout(resolve, 200));
           }
         }
       }
