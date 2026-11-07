@@ -287,12 +287,87 @@ export async function sendMorningBriefing(
   text += `\nCommands: /digest · /remind · /reminders · /connect_gmail · /inbox`;
 
   if (text.length > 4000) text = text.slice(0, 3990) + "\n…";
-  // Always plain text — no parse_mode (underscores in command names break Markdown)
   await bot.api.sendMessage(userId, text);
 }
 
 export async function sendDailyDigest(userId: number, bot: MyBot): Promise<void> {
   await sendMorningBriefing(userId, bot, { includeEmail: await hasUserGmail(userId) });
+}
+
+/** Owner-only XAUUSD Volume Profile routine (Africa/Nairobi times). */
+const XAU_ROUTINE_ALERTS: Array<{ hour: number; minute: number; title: string; body: string }> = [
+  {
+    hour: 9,
+    minute: 0,
+    title: "XAUUSD morning prep",
+    body:
+      "Simple Volume Profile routine\n" +
+      "1. Open TradingView — 15m or 1H\n" +
+      "2. Draw Fixed Range Volume Profile on the previous full day\n" +
+      "3. Extend into today: POC · VAH · VAL\n\n" +
+      "Setups only:\n" +
+      "• POC Bounce — reject at POC\n" +
+      "• Value Area Reversal — outside VAH/VAL then close back in\n" +
+      "• Breakout — break VA, pullback, continue\n\n" +
+      "Rules: risk 0.5–1% · tight SL · ≥2R · max 2–3 losses then stop\n" +
+      "Only take the clear ones.",
+  },
+  {
+    hour: 11,
+    minute: 0,
+    title: "London open — XAUUSD",
+    body:
+      "London session starting.\n" +
+      "Watch POC / VAH / VAL for bounce, value-area reversal, or breakout + pullback.\n" +
+      "Risk 0.5–1%. Max 2–3 losers then stop for the day.",
+  },
+  {
+    hour: 16,
+    minute: 30,
+    title: "NY open / London–NY overlap — XAUUSD",
+    body:
+      "Highest volume window for gold.\n" +
+      "Re-check POC · VAH · VAL. Prefer clear rejects or confirmed breakout continuations.\n" +
+      "No force trades. Target ≥2R.",
+  },
+  {
+    hour: 19,
+    minute: 30,
+    title: "London close check — XAUUSD",
+    body:
+      "London winding down. Review open risk.\n" +
+      "If already 2–3 losses → stop. Protect the account.",
+  },
+  {
+    hour: 22,
+    minute: 0,
+    title: "End-of-day review — XAUUSD",
+    body:
+      "Log the day: setups taken, R multiple, rule breaks.\n" +
+      "Tomorrow: Fixed Range VP on today → extend POC/VAH/VAL again.\n" +
+      "Keep it simple.",
+  },
+];
+
+function scheduleNairobiDaily(
+  hour: number,
+  minute: number,
+  label: string,
+  run: () => Promise<void>,
+): void {
+  const scheduleNext = (): void => {
+    const delay = msUntilNextNairobiTime(hour, minute);
+    setTimeout(async () => {
+      try {
+        await run();
+      } catch (err) {
+        logger.error({ err, label }, "scheduled owner alert failed");
+      }
+      scheduleNext();
+    }, delay);
+    logger.info({ label, hour, minute, nextInMs: delay }, "Scheduled Nairobi daily alert");
+  };
+  scheduleNext();
 }
 
 export function registerReminderHandlers(bot: MyBot): void {
@@ -460,6 +535,39 @@ export function registerReminderHandlers(bot: MyBot): void {
       await ctx.reply(`❌ ${err instanceof Error ? err.message : "Unknown"}`);
     }
   });
+
+  bot.command("sessions", async (ctx) => {
+    if (!ctx.from) return;
+    if (!isOwner(ctx.from.id)) {
+      await ctx.reply("Owner only.");
+      return;
+    }
+    const lines = XAU_ROUTINE_ALERTS.map(
+      (a) =>
+        `• ${String(a.hour).padStart(2, "0")}:${String(a.minute).padStart(2, "0")} — ${a.title}`,
+    );
+    await ctx.reply(
+      `🥇 XAUUSD Volume Profile alerts (Nairobi)\n━━━━━━━━━━━━━━━━━━\n` +
+        lines.join("\n") +
+        `\n\n2h spam ping: OFF by default.\n` +
+        `Re-enable only with OWNER_2H_PING=true on Render.\n` +
+        `Clear reminders: /reminders → Clear all`,
+    );
+  });
+
+  bot.command("ping_off", async (ctx) => {
+    if (!ctx.from) return;
+    if (!isOwner(ctx.from.id)) {
+      await ctx.reply("Owner only.");
+      return;
+    }
+    await ctx.reply(
+      `✅ Every-2-hour owner ping is OFF by default.\n` +
+        `On Render → Environment: delete OWNER_2H_PING or set false, redeploy if it was true.\n` +
+        `You still get XAUUSD alerts at times listed in /sessions.\n` +
+        `Clear queued reminders: /reminders → Clear all`,
+    );
+  });
 }
 
 export function startDailyDigestScheduler(bot: MyBot): void {
@@ -490,62 +598,75 @@ export function startDailyDigestScheduler(bot: MyBot): void {
   scheduleNext();
 }
 
+/**
+ * Always polls due reminders every 2 min.
+ * Old every-2h owner spam is OFF by default (set OWNER_2H_PING=true to re-enable).
+ * Owner gets XAUUSD Volume Profile session alerts instead.
+ */
 export function startTwoHourPingScheduler(bot: MyBot): void {
   const ownerId = parseInt(process.env["BOT_OWNER_ID"] ?? "0", 10);
-  if (!ownerId) {
-    logger.warn("BOT_OWNER_ID not set — 2h ping disabled");
-    return;
-  }
-
-  async function tick(): Promise<void> {
-    try {
-      const fired = await fireDueReminders(bot);
-      const pending = await listPendingReminders(ownerId);
-      let text =
-        `🔔 2-HOUR PING\n━━━━━━━━━━━━━━━━━━\n⏰ Fired: ${fired}\n📌 Pending: ${pending.length}\n`;
-      if (pending.length > 0) {
-        text +=
-          "\nNext up:\n" +
-          pending
-            .slice(0, 5)
-            .map((r) => {
-              const when = new Date(r.fire_at).toLocaleString("en-KE", {
-                timeZone: "Africa/Nairobi",
-                month: "short",
-                day: "numeric",
-                hour: "2-digit",
-                minute: "2-digit",
-              });
-              return `• ${when} — ${r.label}`;
-            })
-            .join("\n");
-      }
-      if (await hasUserGmail(ownerId)) {
-        try {
-          const emails = await fetchRecentEmailsForUser(ownerId, { maxResults: 8 });
-          const urgent = emails.slice(0, 3);
-          if (urgent.length > 0) {
-            text += "\n\n📧 Mail pulse\n";
-            text += urgent.map((e) => `• ${e.subject} — ${e.from}`).join("\n");
-          }
-        } catch (err) {
-          logger.warn({ err }, "2h email pulse failed");
-        }
-      }
-      text += "\n\n/digest · /inbox · /reminders";
-      await bot.api.sendMessage(ownerId, text);
-    } catch (err) {
-      logger.error({ err }, "2h ping failed");
-    }
-  }
 
   setInterval(() => {
     fireDueReminders(bot).catch((err) => logger.error({ err }, "reminder poll failed"));
   }, 2 * 60 * 1000);
 
-  setInterval(() => {
-    void tick();
-  }, 2 * 60 * 60 * 1000);
+  const want2h =
+    (process.env["OWNER_2H_PING"] ?? "").toLowerCase() === "true" ||
+    process.env["OWNER_2H_PING"] === "1";
 
-  logger.info("2-hour owner ping started");
+  if (want2h && ownerId) {
+    setInterval(async () => {
+      try {
+        const fired = await fireDueReminders(bot);
+        const pending = await listPendingReminders(ownerId);
+        let msg =
+          `🔔 2-HOUR PING\n━━━━━━━━━━━━━━━━━━\n⏰ Fired: ${fired}\n📌 Pending: ${pending.length}\n`;
+        if (pending.length > 0) {
+          msg +=
+            "\nNext up:\n" +
+            pending
+              .slice(0, 5)
+              .map((r) => {
+                const when = new Date(r.fire_at).toLocaleString("en-KE", {
+                  timeZone: "Africa/Nairobi",
+                  month: "short",
+                  day: "numeric",
+                  hour: "2-digit",
+                  minute: "2-digit",
+                });
+                return `• ${when} — ${r.label}`;
+              })
+              .join("\n");
+        }
+        msg += "\n\nDisable: OWNER_2H_PING=false on Render · /ping_off · /reminders";
+        await bot.api.sendMessage(ownerId, msg);
+      } catch (err) {
+        logger.error({ err }, "2h ping failed");
+      }
+    }, 2 * 60 * 60 * 1000);
+    logger.info("2-hour owner ping ENABLED (OWNER_2H_PING=true)");
+  } else {
+    logger.info("2-hour owner ping disabled (default). Set OWNER_2H_PING=true to re-enable.");
+  }
+
+  if (!ownerId) {
+    logger.warn("BOT_OWNER_ID not set — XAUUSD session alerts disabled");
+    return;
+  }
+
+  for (const alert of XAU_ROUTINE_ALERTS) {
+    scheduleNairobiDaily(alert.hour, alert.minute, alert.title, async () => {
+      const when = new Date().toLocaleString("en-KE", {
+        timeZone: "Africa/Nairobi",
+        weekday: "short",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+      const body =
+        `🥇 ${alert.title}\n━━━━━━━━━━━━━━━━━━\n${when} (Nairobi)\n\n${alert.body}\n\n` +
+        `/digest · /reminders · /sessions`;
+      await bot.api.sendMessage(ownerId, body);
+    });
+  }
+  logger.info({ count: XAU_ROUTINE_ALERTS.length }, "XAUUSD Volume Profile session alerts armed for owner");
 }
