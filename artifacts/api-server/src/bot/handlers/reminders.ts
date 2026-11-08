@@ -45,25 +45,45 @@ function parseDelay(input: string): number | null {
   return null;
 }
 
-function msUntilNextNairobiTime(hour: number, minute = 0): number {
-  const now = new Date();
+function nairobiParts(date = new Date()): Record<string, string> {
   const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Africa/Nairobi",
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
+    weekday: "short",
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
     hour12: false,
-  }).formatToParts(now);
+  }).formatToParts(date);
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "0";
-  const y = Number(get("year"));
-  const mo = Number(get("month"));
-  const d = Number(get("day"));
-  const h = Number(get("hour"));
-  const mi = Number(get("minute"));
-  const s = Number(get("second"));
+  return {
+    year: get("year"),
+    month: get("month"),
+    day: get("day"),
+    weekday: get("weekday"),
+    hour: get("hour"),
+    minute: get("minute"),
+    second: get("second"),
+  };
+}
+
+/** Sat/Sun in Africa/Nairobi — XAUUSD session alerts stay silent. */
+function isWeekendNairobi(date = new Date()): boolean {
+  const wd = nairobiParts(date).weekday.toLowerCase();
+  return wd === "sat" || wd === "sun";
+}
+
+function msUntilNextNairobiTime(hour: number, minute = 0): number {
+  const now = new Date();
+  const p = nairobiParts(now);
+  const y = Number(p.year);
+  const mo = Number(p.month);
+  const d = Number(p.day);
+  const h = Number(p.hour);
+  const mi = Number(p.minute);
+  const s = Number(p.second);
   const nowNairobiAsUtc = Date.UTC(y, mo - 1, d, h, mi, s);
   let targetNairobiAsUtc = Date.UTC(y, mo - 1, d, hour, minute, 0);
   if (targetNairobiAsUtc <= nowNairobiAsUtc) targetNairobiAsUtc += 24 * 60 * 60 * 1000;
@@ -294,8 +314,22 @@ export async function sendDailyDigest(userId: number, bot: MyBot): Promise<void>
   await sendMorningBriefing(userId, bot, { includeEmail: await hasUserGmail(userId) });
 }
 
-/** Owner-only XAUUSD Volume Profile routine (Africa/Nairobi times). */
+/** Owner-only XAUUSD Volume Profile routine (Africa/Nairobi times). Weekends skipped. */
 const XAU_ROUTINE_ALERTS: Array<{ hour: number; minute: number; title: string; body: string }> = [
+  {
+    hour: 0,
+    minute: 5,
+    title: "XAUUSD new day — draw FRVP",
+    body:
+      "Previous full day has closed. A new XAUUSD day is entering (Kenya time).\n\n" +
+      "Do this now:\n" +
+      "1. Open TradingView — 15m or 1H\n" +
+      "2. Draw Fixed Range Volume Profile on the previous full day\n" +
+      "   (Monday: use Friday's full day — weekend has no session)\n" +
+      "3. Extend POC · VAH · VAL into today\n\n" +
+      "Then only trade clear: POC Bounce · Value Area Reversal · Breakout\n" +
+      "Rules: 0.5–1% risk · tight SL · ≥2R · max 2–3 losses then stop",
+  },
   {
     hour: 9,
     minute: 0,
@@ -359,7 +393,11 @@ function scheduleNairobiDaily(
     const delay = msUntilNextNairobiTime(hour, minute);
     setTimeout(async () => {
       try {
-        await run();
+        if (isWeekendNairobi()) {
+          logger.info({ label }, "Skipping XAU alert — weekend in Nairobi");
+        } else {
+          await run();
+        }
       } catch (err) {
         logger.error({ err, label }, "scheduled owner alert failed");
       }
@@ -549,7 +587,9 @@ export function registerReminderHandlers(bot: MyBot): void {
     await ctx.reply(
       `🥇 XAUUSD Volume Profile alerts (Nairobi)\n━━━━━━━━━━━━━━━━━━\n` +
         lines.join("\n") +
-        `\n\n2h spam ping: OFF by default.\n` +
+        `\n\nNo alerts on Saturday or Sunday (market closed).\n` +
+        `00:05 = previous day closed → draw FRVP + extend POC/VAH/VAL.\n\n` +
+        `2h spam ping: OFF by default.\n` +
         `Re-enable only with OWNER_2H_PING=true on Render.\n` +
         `Clear reminders: /reminders → Clear all`,
     );
@@ -601,7 +641,7 @@ export function startDailyDigestScheduler(bot: MyBot): void {
 /**
  * Always polls due reminders every 2 min.
  * Old every-2h owner spam is OFF by default (set OWNER_2H_PING=true to re-enable).
- * Owner gets XAUUSD Volume Profile session alerts instead.
+ * Owner gets XAUUSD Volume Profile session alerts instead (weekdays only).
  */
 export function startTwoHourPingScheduler(bot: MyBot): void {
   const ownerId = parseInt(process.env["BOT_OWNER_ID"] ?? "0", 10);
