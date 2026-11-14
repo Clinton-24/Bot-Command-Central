@@ -1,6 +1,6 @@
 import { InlineKeyboard } from "grammy";
 import type { MyBot } from "../index";
-import type { BotContext } from "./context";
+import type { BotContext } from "../context";
 import { processChk, processRzp, processBin, processGen } from "./cards";
 import { processSocial } from "./social";
 import { processMeetingInput } from "./meetings";
