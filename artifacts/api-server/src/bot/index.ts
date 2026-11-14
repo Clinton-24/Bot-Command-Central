@@ -8,6 +8,7 @@ import { registerSocialHandlers, registerSocialCallbacks } from "./handlers/soci
 import { registerAdminHandlers, registerAdminCallbacks } from "./handlers/admin";
 import { registerOwnerHandlers } from "./handlers/owner";
 import { registerWelcomeHandler } from "./handlers/welcome";
+import { registerGrowthHandlers } from "./handlers/growth";
 import { registerAntiSpamHandler } from "./handlers/antispam";
 import { registerMeetingHandlers, registerMeetingCallbacks } from "./handlers/meetings";
 import { registerHexagonHandlers, registerHexagonCallbacks } from "./handlers/hexagon";
@@ -104,6 +105,7 @@ export function createBot(): MyBot {
   registerMenuHandlers(bot);
   registerAntiSpamHandler(bot);
   registerWelcomeHandler(bot);
+  registerGrowthHandlers(bot);
 
   registerCardShopHandlers(bot);
   registerCardShopCallbacks(bot);
