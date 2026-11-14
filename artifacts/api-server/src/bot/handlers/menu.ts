@@ -21,7 +21,9 @@ export function mainMenuKeyboard(userId?: number): InlineKeyboard {
     .text("📅 Meetings", "menu:meetings")
     .row();
 
-  kb.text("🤖 Crescent AI", "menu:hexagon").row();
+  kb.text("🤖 Crescent AI", "menu:hexagon")
+    .text("📈 Trading", "menu:trading")
+    .row();
 
   if (userId && isOwner(userId)) {
     kb.text("🔮 Owner Panel", "hex:main")
@@ -194,6 +196,13 @@ export function registerMenuHandlers(bot: MyBot): void {
       return;
     }
 
+    if (action === "trading:journal") {
+      ctx.session.pendingAction = undefined;
+      const { processJournalInput } = await import("./trading");
+      await processJournalInput(ctx, text);
+      return;
+    }
+
     // Only reply as Crescent when chat mode is explicitly on (/crescent, Try Crescent, Chat button).
     // After /exit, free-text must NOT reopen Crescent.
     if (ctx.session.crescentMode || action === "hexagon:input") {
@@ -326,6 +335,12 @@ export function registerMenuHandlers(bot: MyBot): void {
     await ctx.reply("👋 Left Crescent chat mode.");
   });
 
+  bot.callbackQuery("menu:trading", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const { openTradingPanel } = await import("./trading");
+    await openTradingPanel(ctx);
+  });
+
   bot.callbackQuery("menu:help", async (ctx) => {
     await ctx.answerCallbackQuery();
     const help =
@@ -337,6 +352,7 @@ export function registerMenuHandlers(bot: MyBot): void {
       `/briefing — Daily briefing\n` +
       `/imagine — Image generation\n` +
       `/plans — Subscription plans\n` +
+      `/trading — Trading desk\n` +
       `/exit — Leave Crescent chat\n` +
       `/id — Your Telegram ID`;
     try {
