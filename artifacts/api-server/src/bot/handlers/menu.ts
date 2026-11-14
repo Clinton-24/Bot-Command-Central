@@ -151,7 +151,9 @@ export function registerMenuHandlers(bot: MyBot): void {
     if (cmd === "/exit" || cmd.startsWith("/exit@")) {
       const { disableCrescentChat } = await import("./hexagon");
       disableCrescentChat(ctx);
-      await ctx.reply("👋 Left Crescent chat mode.");
+      await ctx.reply(
+        "👋 Left Crescent chat mode.\n\nI will stay quiet until you open Crescent again (/crescent or Try Crescent).",
+      );
       return;
     }
     if (cmd === "/menu" || cmd.startsWith("/menu@")) {
@@ -192,14 +194,9 @@ export function registerMenuHandlers(bot: MyBot): void {
       return;
     }
 
+    // Only reply as Crescent when chat mode is explicitly on (/crescent, Try Crescent, Chat button).
+    // After /exit, free-text must NOT reopen Crescent.
     if (ctx.session.crescentMode || action === "hexagon:input") {
-      await handleHexagonMessage(ctx, text);
-      return;
-    }
-    // Private free-text with no active draft → Crescent (session may have dropped)
-    if (ctx.chat?.type === "private" && !cmd.startsWith("/") && !action) {
-      ctx.session.crescentMode = true;
-      ctx.session.pendingAction = "hexagon:input";
       await handleHexagonMessage(ctx, text);
       return;
     }
