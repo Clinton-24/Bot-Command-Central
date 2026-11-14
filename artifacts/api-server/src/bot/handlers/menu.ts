@@ -23,6 +23,8 @@ export function mainMenuKeyboard(userId?: number): InlineKeyboard {
 
   kb.text("🤖 Crescent AI", "menu:hexagon")
     .text("📈 Trading", "menu:trading")
+    .row()
+    .text("📰 Forex News", "menu:fxnews")
     .row();
 
   if (userId && isOwner(userId)) {
@@ -335,6 +337,12 @@ export function registerMenuHandlers(bot: MyBot): void {
     await ctx.reply("👋 Left Crescent chat mode.");
   });
 
+  bot.callbackQuery("menu:fxnews", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    const { openForexNews } = await import("./forex-news");
+    await openForexNews(ctx);
+  });
+
   bot.callbackQuery("menu:trading", async (ctx) => {
     await ctx.answerCallbackQuery();
     const { openTradingPanel } = await import("./trading");
@@ -353,6 +361,7 @@ export function registerMenuHandlers(bot: MyBot): void {
       `/imagine — Image generation\n` +
       `/plans — Subscription plans\n` +
       `/trading — Trading desk\n` +
+      `/fxnews — Forex economic calendar\n` +
       `/exit — Leave Crescent chat\n` +
       `/id — Your Telegram ID`;
     try {
