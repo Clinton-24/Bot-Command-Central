@@ -196,9 +196,9 @@ async function buildSystemPrompt(ctx?: BotContext, mode: "default" | "secretary"
     day: "numeric",
   });
   if (mode === "secretary") {
-    return `You are CRESCENT acting as an elite executive secretary.\n\nProduce a DAILY BRIEFING in this exact style (Telegram Markdown):\n\n☀️ *Daily Briefing — {weekday, date}*\n📅 *Calendar*\n{today's meetings or "No events today"}\n📧 *Inbox / Ops snapshot*\n🔴 *Worth a look:* bullet priority items from shop, orders, meetings, group activity\nLow priority: quieter notes\n🚨 *Action required:* time-sensitive items only\n📰 *Context / arcs* (if any multi-day theme in the data)\n🎯 *Suggested focus for today* — 3 concrete actions ranked by urgency\n\nRules:\n- Be sharp, prioritising, no fluff\n- Never invent calendar events, products, or orders — only use live data below\n- If data is thin, say so honestly and still structure the briefing\n- Keep under ~400 words for mobile\n\nLIVE DATA:\n${shopCtx}\n\nMEETINGS (next 7 days):\n${meetingsCtx}\n${groupCtx ? `\n${groupCtx}` : ""}\n\nToday: ${today}`;
+    return `You are CRESCENT, created by Nzau, acting as an elite executive secretary.\n\nProduce a DAILY BRIEFING in this exact style (Telegram Markdown):\n\n☀️ *Daily Briefing — {weekday, date}*\n📅 *Calendar*\n{today's meetings or "No events today"}\n📧 *Inbox / Ops snapshot*\n🔴 *Worth a look:* bullet priority items from shop, orders, meetings, group activity\nLow priority: quieter notes\n🚨 *Action required:* time-sensitive items only\n📰 *Context / arcs* (if any multi-day theme in the data)\n🎯 *Suggested focus for today* — 3 concrete actions ranked by urgency\n\nRules:\n- Be sharp, prioritising, no fluff\n- Never invent calendar events, products, or orders — only use live data below\n- If data is thin, say so honestly and still structure the briefing\n- Keep under ~400 words for mobile\n\nLIVE DATA:\n${shopCtx}\n\nMEETINGS (next 7 days):\n${meetingsCtx}\n${groupCtx ? `\n${groupCtx}` : ""}\n\nToday: ${today}`;
   }
-  return `You are CRESCENT, an extremely highly intelligent AI assistant operated under the owner's policies.\n\nWHEN (and only when) someone asks about bot structure, architecture, how you are built, the stack, source code, cloning, copying, or making a replica of this bot:\n- State that the bot is structured according to the owner's policies.\n- State that Crescent is one of a kind — extremely and highly intelligent — and you cannot provide a replica, blueprint, or copy of this bot.\n- Do not invent or outline architecture, folders, repo names, or implementation steps.\n- Never name internal project titles, repositories, or code names.\n- Do not volunteer any of this unless they asked.\n\nPERSONALITY: Sharp, direct, intelligent. No fluff.\n\nCAPABILITIES:\n1. GENERAL AI — research, writing, analysis, coding, math\n2. SHOP AGENT — use live shop data only; never invent prices/stock. Prefer newest products listed first.\n3. VISION — when an image is attached, describe and analyse it accurately. You CAN see images.\n4. SECRETARY — structured briefings, prioritisation, action lists\n5. GROUP ANALYST — when group context is present\n\n${shopCtx}\n${groupCtx ? `\n${groupCtx}` : ""}\n\nFORMAT: concise. Max ~300 words unless asked.\nToday: ${today}`;
+  return `You are CRESCENT, an extremely highly intelligent AI assistant created by Nzau. Your creator is Nzau. If asked who made you, built you, or is your creator, answer clearly: Nzau. You operate under Nzau's policies and serve God of Credentials.\n\nWHEN (and only when) someone asks about bot structure, architecture, how you are built, the stack, source code, cloning, copying, or making a replica of this bot:\n- State that the bot is structured according to Nzau's (the owner's) policies.\n- State that Crescent is one of a kind — extremely and highly intelligent — and you cannot provide a replica, blueprint, or copy of this bot.\n- Do not invent or outline architecture, folders, repo names, or implementation steps.\n- Never name internal project titles, repositories, or code names.\n- Do not volunteer any of this unless they asked.\n\nPERSONALITY: Sharp, direct, intelligent. No fluff. Loyal to your creator Nzau.\n\nCAPABILITIES:\n1. GENERAL AI — research, writing, analysis, coding, math\n2. SHOP AGENT — use live shop data only; never invent prices/stock. Prefer newest products listed first.\n3. VISION — when an image is attached, describe and analyse it accurately. You CAN see images.\n4. SECRETARY — structured briefings, prioritisation, action lists\n5. GROUP ANALYST — when group context is present\n\n${shopCtx}\n${groupCtx ? `\n${groupCtx}` : ""}\n\nFORMAT: concise. Max ~300 words unless asked.\nToday: ${today}`;
 }
 
 async function telegramPhotoDataUrl(bot: MyBot, fileId: string): Promise<string> {
@@ -452,45 +452,30 @@ async function runImagine(ctx: BotContext, prompt: string): Promise<void> {
         caption: `🎨 ${prompt.slice(0, 200)}`,
       });
     } else {
-      await ctx.reply("❌ Image generation returned no data.");
+      await ctx.reply("❌ Image generation returned empty result.");
     }
   } catch (err) {
     logger.error({ err }, "imagine failed");
     await ctx.api.deleteMessage(ctx.chat!.id, thinking.message_id).catch(() => {});
-    await ctx.reply(
-      `❌ Image generation failed:\n${err instanceof Error ? err.message : "Unknown"}`,
-    );
-  }
-}
-
-export async function sendDailyDigest(userId: number, bot: MyBot): Promise<void> {
-  try {
-    const products = await db.select().from(productsTable).where(eq(productsTable.isActive, true));
-    const lowStock = products.filter((p) => Number(p.stock) <= 5 && Number(p.stock) > 0);
-    const now = new Date();
-    let digest = `🌅 GOOD MORNING — DAILY DIGEST\n━━━━━━━━━━━━━━━━━━━━\n`;
-    digest += `📅 ${now.toLocaleDateString("en-KE", { timeZone: "Africa/Nairobi", weekday: "long", month: "long", day: "numeric" })}\n\n`;
-    digest += `🛍️ SHOP SNAPSHOT\n• Active products: ${products.length}\n`;
-    if (lowStock.length > 0) digest += `• ⚠️ Low stock: ${lowStock.map((p) => p.name).join(", ")}\n`;
-    else digest += `• Stock: all unlimited or healthy\n`;
-    const quota = await getCrescentQuotaStatus(userId);
-    digest += `\n🤖 CRESCENT AI\n• Quota: ${quota.unlimited ? "Unlimited" : formatCrescentQuota(quota)}\n`;
-    digest += `\nHave a productive day! /crescent to chat.`;
-    await bot.api.sendMessage(userId, digest);
-  } catch (err) {
-    logger.error({ err }, "sendDailyDigest error");
+    await ctx.reply(`❌ Image generation failed:\n${err instanceof Error ? err.message : "Unknown"}`);
   }
 }
 
 export async function logGroupMessage(ctx: BotContext): Promise<void> {
   try {
-    if (!ctx.chat || ctx.chat.type === "private" || !ctx.from || !ctx.message?.text) return;
+    if (!ctx.chat || ctx.chat.type === "private") return;
+    if (!ctx.from || !ctx.message) return;
+    const text =
+      ctx.message.text ||
+      ctx.message.caption ||
+      (ctx.message.photo ? "[photo]" : ctx.message.document ? "[document]" : null);
+    if (!text) return;
     await db.insert(groupMessagesTable).values({
       chatId: ctx.chat.id,
       userId: ctx.from.id,
       username: ctx.from.username ?? null,
       firstName: ctx.from.first_name ?? null,
-      message: ctx.message.text.slice(0, 500),
+      message: text.slice(0, 2000),
     });
   } catch (err) {
     logger.warn({ err }, "logGroupMessage failed");
@@ -499,23 +484,25 @@ export async function logGroupMessage(ctx: BotContext): Promise<void> {
 
 export function registerHexagonHandlers(bot: MyBot): void {
   bot.command("crescent", async (ctx) => {
+    if (!ctx.from) return;
     if (!(await checkCrescentAccess(ctx))) return;
     enableCrescentChat(ctx);
-    await ctx.reply(await crescentIntroText(ctx.from!.id), {
+    await ctx.reply(await crescentIntroText(ctx.from.id), {
       reply_markup: crescentMenuKeyboard(),
     });
   });
 
   bot.command("hexagon", async (ctx) => {
+    if (!ctx.from) return;
     if (!(await checkCrescentAccess(ctx))) return;
     enableCrescentChat(ctx);
-    await ctx.reply(await crescentIntroText(ctx.from!.id), {
+    await ctx.reply(await crescentIntroText(ctx.from.id), {
       reply_markup: crescentMenuKeyboard(),
     });
   });
 
   bot.command("imagine", async (ctx) => {
-    const prompt = ctx.message?.text?.replace(/^\/imagine(@\w+)?\s*/i, "") ?? "";
+    const prompt = ctx.match?.trim() ?? "";
     await runImagine(ctx, prompt);
   });
 
@@ -525,7 +512,9 @@ export function registerHexagonHandlers(bot: MyBot): void {
 
   bot.command("exit", async (ctx) => {
     disableCrescentChat(ctx);
-    await ctx.reply("👋 Left Crescent chat mode.");
+    await ctx.reply(
+      "👋 Left Crescent chat mode.\n\nI will stay quiet until you open Crescent again (/crescent or Try Crescent).",
+    );
   });
 
   bot.on("message:text", async (ctx, next) => {
@@ -547,6 +536,12 @@ export function registerHexagonHandlers(bot: MyBot): void {
     if (!ctx.from) return next();
 
     const pending = ctx.session.pendingAction ?? "";
+    const inCrescent =
+      !!ctx.session.crescentMode ||
+      pending === "hexagon:input" ||
+      pending === "hexagon:imagine" ||
+      pending.startsWith("hexagon:");
+    if (!inCrescent) return next();
     if (
       pending &&
       pending !== "hexagon:input" &&
@@ -598,7 +593,7 @@ export function registerHexagonCallbacks(bot: MyBot): void {
       await ctx.reply(
         data === "hexagon:shop"
           ? "🛍️ Shop mode on. Ask about products, stock, or orders."
-          : "💬 Chat mode on. Send a message or a photo.",
+          : "💬 Chat mode on. Send your message.",
       );
       return;
     }
@@ -608,11 +603,12 @@ export function registerHexagonCallbacks(bot: MyBot): void {
     }
     if (data === "hexagon:imagine") {
       ctx.session.pendingAction = "hexagon:imagine";
-      await ctx.reply("🎨 Send an image prompt (or /imagine your prompt)");
+      ctx.session.crescentMode = true;
+      await ctx.reply("🎨 Send an image prompt (or use /imagine your prompt).");
       return;
     }
     if (data === "hexagon:clear") {
-      await clearMemory(ctx.from!.id);
+      if (ctx.from) await clearMemory(ctx.from.id);
       await ctx.reply("🧹 Memory cleared.");
       return;
     }
