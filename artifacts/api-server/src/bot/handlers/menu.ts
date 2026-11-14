@@ -1,6 +1,6 @@
 import { InlineKeyboard } from "grammy";
 import type { MyBot } from "../index";
-import type { BotContext } from "../context";
+import type { BotContext } from "./context";
 import { processChk, processRzp, processBin, processGen } from "./cards";
 import { processSocial } from "./social";
 import { processMeetingInput } from "./meetings";
@@ -170,6 +170,28 @@ export function registerMenuHandlers(bot: MyBot): void {
       return next();
     }
 
+    // Card tools take priority over Crescent chat mode
+    if (action === "cards:chk") {
+      ctx.session.pendingAction = undefined;
+      await processChk(ctx, text);
+      return;
+    }
+    if (action === "cards:bin") {
+      ctx.session.pendingAction = undefined;
+      await processBin(ctx, text);
+      return;
+    }
+    if (action === "cards:gen") {
+      ctx.session.pendingAction = undefined;
+      await processGen(ctx, text);
+      return;
+    }
+    if (action === "cards:rzp") {
+      ctx.session.pendingAction = undefined;
+      await processRzp(ctx, text);
+      return;
+    }
+
     if (ctx.session.crescentMode || action === "hexagon:input") {
       await handleHexagonMessage(ctx, text);
       return;
@@ -210,22 +232,6 @@ export function registerMenuHandlers(bot: MyBot): void {
     }
     if (action?.startsWith("meetings:")) {
       await processMeetingInput(ctx, action, text);
-      return;
-    }
-    if (action === "cards:chk") {
-      await processChk(ctx, text);
-      return;
-    }
-    if (action === "cards:bin") {
-      await processBin(ctx, text);
-      return;
-    }
-    if (action === "cards:gen") {
-      await processGen(ctx, text);
-      return;
-    }
-    if (action === "cards:rzp") {
-      await processRzp(ctx, text);
       return;
     }
     if (action === "email:draft") {
