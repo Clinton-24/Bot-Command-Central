@@ -3,11 +3,16 @@
  * NOTE: Do NOT import from ../index (circular with welcome → index).
  */
 import { InlineKeyboard } from "grammy";
+import type { Bot } from "grammy";
 import { eq } from "drizzle-orm";
 import { db, accessTable } from "@workspace/db";
 import { isOwner } from "../helpers";
 import { logger } from "../../lib/logger";
 import { addBonusCredits, REFERRAL_BONUS_CREDITS } from "./crescent-quota";
+import type { BotContext } from "../context";
+import { openCrescentPanel } from "./hexagon";
+
+type MyBot = Bot<BotContext>;
 
 type NotifyBot = {
   api: {
@@ -165,7 +170,6 @@ export function growthWelcomeText(
   isNew: boolean,
   asOwner = false,
 ): string {
-  // Escape user-controlled names so Telegram Markdown never 400s
   const who = escapeMd(displayName);
   let body =
     `🌙 *Crescent*\n━━━━━━━━━━━━━━━━━━\n\n` +
@@ -192,4 +196,38 @@ export function growthWelcomeText(
 
   body += `_Tap Try Crescent or open the menu._`;
   return body;
+}
+
+/** Welcome / growth buttons: Try Crescent + Invite friends */
+export function registerGrowthHandlers(bot: MyBot): void {
+  bot.callbackQuery("growth:try_crescent", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    if (!ctx.from) return;
+
+    try {
+      await ensureAutoFreeAccess({
+        id: ctx.from.id,
+        username: ctx.from.username ?? null,
+        firstName: ctx.from.first_name ?? null,
+      });
+    } catch (err) {
+      logger.warn({ err }, "growth:try_crescent auto-access failed");
+    }
+
+    await openCrescentPanel(ctx);
+  });
+
+  bot.callbackQuery("growth:invite", async (ctx) => {
+    await ctx.answerCallbackQuery().catch(() => {});
+    if (!ctx.from) return;
+
+    const link = referralLink(ctx.from.id);
+    await ctx.reply(
+      `🔗 Your invite link\n━━━━━━━━━━━━━━━━━━\n\n` +
+        `${link}\n\n` +
+        `• Friends get free access + Crescent AI\n` +
+        `• You get +${REFERRAL_BONUS_CREDITS} Crescent bonus per join\n` +
+        `Share the link or use /invite.`,
+    );
+  });
 }
