@@ -8,9 +8,15 @@ import { eq } from "drizzle-orm";
 import { db, accessTable } from "@workspace/db";
 import { isOwner } from "../helpers";
 import { logger } from "../../lib/logger";
-import { addBonusCredits, REFERRAL_BONUS_CREDITS } from "./crescent-quota";
 import type { BotContext } from "../context";
-import { openCrescentPanel } from "./hexagon";
+import { enableCrescentChat } from "./hexagon";
+import { checkCrescentAccess } from "./access";
+import {
+  addBonusCredits,
+  REFERRAL_BONUS_CREDITS,
+  formatCrescentQuota,
+  getCrescentQuotaStatus,
+} from "./crescent-quota";
 
 type MyBot = Bot<BotContext>;
 
@@ -214,7 +220,32 @@ export function registerGrowthHandlers(bot: MyBot): void {
       logger.warn({ err }, "growth:try_crescent auto-access failed");
     }
 
-    await openCrescentPanel(ctx);
+    if (!(await checkCrescentAccess(ctx))) return;
+    enableCrescentChat(ctx);
+
+    const quota = await getCrescentQuotaStatus(ctx.from.id);
+    const quotaText = quota.unlimited ? "Unlimited" : formatCrescentQuota(quota);
+    const kb = new InlineKeyboard()
+      .text("💬 Chat", "hexagon:chat")
+      .text("🛍️ Shop Q&A", "hexagon:shop")
+      .row()
+      .text("☀️ Briefing", "hexagon:briefing")
+      .text("🎨 Imagine", "hexagon:imagine")
+      .row()
+      .text("🧹 Clear", "hexagon:clear")
+      .text("🏠 Main Menu", "menu:main");
+
+    await ctx.reply(
+      `🤖 CRESCENT AI AGENT\n━━━━━━━━━━━━━━━━━━\n\n` +
+        `Shop-aware · Vision · Secretary · Image gen\n\n` +
+        `📊 Quota: ${quotaText}\n\n` +
+        `• Send a photo to analyse it\n` +
+        `• /imagine a cyberpunk market stall\n` +
+        `• /briefing — daily secretary briefing\n` +
+        `• Or just type a question\n` +
+        `• /exit — leave chat mode`,
+      { reply_markup: kb },
+    );
   });
 
   bot.callbackQuery("growth:invite", async (ctx) => {
