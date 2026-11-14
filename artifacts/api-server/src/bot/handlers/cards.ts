@@ -307,7 +307,8 @@ export function registerCardHandlers(bot: MyBot): void {
 
 export function registerCardCallbacks(bot: MyBot): void {
   bot.callbackQuery("cards:chk", async (ctx) => {
-    ctx.session.pendingAction = "card:chk";
+    ctx.session.pendingAction = "cards:chk";
+    ctx.session.crescentMode = false;
     await ctx.answerCallbackQuery();
     await ctx.reply(
       `✅ Card Checker\n━━━━━━━━━━━━━━━━━━\n\nSend your card details:\n\`CARD|MM|YY|CVV\`\n\nExample:\n\`4111111111111111|12|26|123\``,
@@ -316,7 +317,8 @@ export function registerCardCallbacks(bot: MyBot): void {
   });
 
   bot.callbackQuery("cards:rzp", async (ctx) => {
-    ctx.session.pendingAction = "card:rzp";
+    ctx.session.pendingAction = "cards:rzp";
+    ctx.session.crescentMode = false;
     await ctx.answerCallbackQuery();
     await ctx.reply(
       `🔍 RZP Checker\n━━━━━━━━━━━━━━━━━━\n\nSend:\n\`CARD|MM|YY|CVV\`\n\nExample:\n\`5200000000000007|09|25|456\``,
@@ -325,7 +327,8 @@ export function registerCardCallbacks(bot: MyBot): void {
   });
 
   bot.callbackQuery("cards:bin", async (ctx) => {
-    ctx.session.pendingAction = "card:bin";
+    ctx.session.pendingAction = "cards:bin";
+    ctx.session.crescentMode = false;
     await ctx.answerCallbackQuery();
     await ctx.reply(`🏦 BIN Lookup\n\nSend a 6-digit BIN.\n\nExample: \`555479\``, {
       parse_mode: "Markdown",
@@ -333,7 +336,8 @@ export function registerCardCallbacks(bot: MyBot): void {
   });
 
   bot.callbackQuery("cards:gen", async (ctx) => {
-    ctx.session.pendingAction = "card:gen";
+    ctx.session.pendingAction = "cards:gen";
+    ctx.session.crescentMode = false;
     await ctx.answerCallbackQuery();
     await ctx.reply(`🎰 Card Generator\n\nSend a 6-digit BIN.\n\nExample: \`411111\``, {
       parse_mode: "Markdown",
