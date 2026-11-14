@@ -22,6 +22,7 @@ import { registerSubscriptionHandlers } from "./handlers/subscription";
 import { registerAIAgentHandlers } from "./handlers/ai_agents";
 import { registerCardShopHandlers, registerCardShopCallbacks } from "./handlers/cardshop";
 import { registerDbLogsHandlers, registerDbLogsCallbacks } from "./handlers/dblogs";
+import { registerTradingHandlers } from "./handlers/trading";
 import { killSwitchMiddleware, registerKillHandlers, getKillStatus } from "./handlers/kill";
 import { activityAlertMiddleware, registerActivityCommands } from "./handlers/activity";
 import { createPgSessionStorage } from "../lib/session-store";
@@ -135,6 +136,7 @@ export function createBot(): MyBot {
   registerHexHandlers(bot);
   registerHexCallbacks(bot);
   registerAccessHandlers(bot);
+  registerTradingHandlers(bot);
   registerSubscriptionHandlers(bot);
   registerAIAgentHandlers(bot);
   registerOwnerHandlers(bot);
