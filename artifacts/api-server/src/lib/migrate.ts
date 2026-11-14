@@ -243,6 +243,40 @@ export async function runMigrations(): Promise<void> {
       );
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS trading_access (
+        user_id BIGINT PRIMARY KEY,
+        opted_in BOOLEAN NOT NULL DEFAULT FALSE,
+        approved BOOLEAN NOT NULL DEFAULT FALSE,
+        insights_enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        approved_by BIGINT,
+        approved_at TIMESTAMP,
+        notes TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS trading_journals (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        pair TEXT NOT NULL DEFAULT 'XAUUSD',
+        direction TEXT,
+        entry_price TEXT,
+        stop_loss TEXT,
+        take_profit TEXT,
+        result TEXT,
+        r_multiple TEXT,
+        notes TEXT,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS trading_journals_user_id_idx ON trading_journals (user_id);
+    `);
+
     logger.info("Migrations complete ✅");
   } catch (err) {
     logger.error({ err }, "Migration failed ❌");
