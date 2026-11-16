@@ -176,7 +176,6 @@ export function registerMenuHandlers(bot: MyBot): void {
       return next();
     }
 
-    // Card tools take priority over Crescent chat mode
     if (action === "cards:chk") {
       ctx.session.pendingAction = undefined;
       await processChk(ctx, text);
@@ -204,9 +203,13 @@ export function registerMenuHandlers(bot: MyBot): void {
       await processJournalInput(ctx, text);
       return;
     }
+    if (action === "trading:set_strategy") {
+      ctx.session.pendingAction = undefined;
+      const { processStrategyInput } = await import("./trading-sessions");
+      await processStrategyInput(ctx, text);
+      return;
+    }
 
-    // Only reply as Crescent when chat mode is explicitly on (/crescent, Try Crescent, Chat button).
-    // After /exit, free-text must NOT reopen Crescent.
     if (ctx.session.crescentMode || action === "hexagon:input") {
       await handleHexagonMessage(ctx, text);
       return;
@@ -361,6 +364,7 @@ export function registerMenuHandlers(bot: MyBot): void {
       `/imagine — Image generation\n` +
       `/plans — Subscription plans\n` +
       `/trading — Trading desk\n` +
+      `/sessions — Your session alerts\n` +
       `/fxnews — Forex economic calendar\n` +
       `/exit — Leave Crescent chat\n` +
       `/id — Your Telegram ID`;
