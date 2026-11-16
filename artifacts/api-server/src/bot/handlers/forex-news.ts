@@ -1,11 +1,13 @@
 /**
  * Forex News — high-impact economic calendar (Nairobi times)
  * Free public calendar feeds; cached briefly to avoid rate limits.
+ * Access: Free, Premium, and VIP (approved users).
  */
 import { InlineKeyboard } from "grammy";
 import type { MyBot } from "../index";
 import type { BotContext } from "../context";
 import { checkAccess } from "./access";
+import { isOwner } from "../helpers";
 import { logger } from "../../lib/logger";
 
 type Impact = "high" | "medium" | "low";
@@ -27,6 +29,15 @@ interface CacheEntry {
 
 const cache = new Map<string, CacheEntry>();
 const CACHE_MS = 5 * 60 * 1000;
+
+/** Forex News: free, premium, and VIP (any approved non-blocked tier). */
+async function canUseForexNews(ctx: BotContext): Promise<boolean> {
+  const userId = ctx.from?.id;
+  if (!userId) return false;
+  if (isOwner(userId)) return true;
+  // Minimum gate is free — premium and VIP rank higher and always pass.
+  return checkAccess(ctx, "free");
+}
 
 function impactEmoji(impact: string): string {
   const i = impact.toLowerCase();
@@ -175,10 +186,11 @@ function newsKeyboard(): InlineKeyboard {
 }
 
 export async function openForexNews(ctx: BotContext): Promise<void> {
-  if (!(await checkAccess(ctx, "free"))) return;
+  if (!(await canUseForexNews(ctx))) return;
   await ctx.reply(
     `📰 *FOREX NEWS*\n━━━━━━━━━━━━━━━━━━\n\n` +
       `Live economic calendar for majors (USD · EUR · GBP · JPY…).\n` +
+      `Open to *Free · Premium · VIP* users.\n` +
       `Best for XAUUSD: focus on *high-impact USD* releases.\n\n` +
       `Pick a view:`,
     { parse_mode: "Markdown", reply_markup: newsKeyboard() },
@@ -186,7 +198,7 @@ export async function openForexNews(ctx: BotContext): Promise<void> {
 }
 
 async function sendCalendar(ctx: BotContext, mode: "high" | "week"): Promise<void> {
-  if (!(await checkAccess(ctx, "free"))) return;
+  if (!(await canUseForexNews(ctx))) return;
   const thinking = await ctx.reply("📰 Loading calendar…");
   try {
     const events = await loadEvents(mode);
