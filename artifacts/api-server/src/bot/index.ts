@@ -130,7 +130,6 @@ export function createBot(): MyBot {
   registerHexagonHandlers(bot);
   registerHexagonCallbacks(bot);
   registerInlineCrescent(bot);
-  registerReminderHandlers(bot);
   registerBatteryHandlers(bot);
   registerEmailHandlers(bot);
   registerEmailCallbacks(bot);
@@ -140,6 +139,7 @@ export function createBot(): MyBot {
   registerAccessHandlers(bot);
   registerTradingHandlers(bot);
   startTradingAlertScheduler(bot);
+  registerReminderHandlers(bot);
   registerForexNewsHandlers(bot);
   registerSubscriptionHandlers(bot);
   registerAIAgentHandlers(bot);
