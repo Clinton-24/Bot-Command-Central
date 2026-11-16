@@ -1,8 +1,9 @@
 /**
- * Forex News — high-impact economic calendar (Nairobi times)
- * Free public calendar feeds; cached briefly to avoid rate limits.
- * Access: Free, Premium, and VIP (approved users).
- * Daily push at 00:15 Africa/Nairobi: full calendar for that weekday.
+ * Forex News — economic calendar (Nairobi times)
+ *
+ * Category access (menu /fxnews /calendar): Premium + VIP only.
+ * News notifications (10 min before each event + optional daily): Free + Premium + VIP.
+ * Free Crescent AI quota is 10/day (see crescent-quota.ts).
  */
 import { InlineKeyboard } from "grammy";
 import { and, eq, ne } from "drizzle-orm";
@@ -23,6 +24,7 @@ interface CalendarEvent {
   forecast?: string;
   previous?: string;
   actual?: string;
+  id?: string;
 }
 
 interface CacheEntry {
@@ -33,12 +35,15 @@ interface CacheEntry {
 const cache = new Map<string, CacheEntry>();
 const CACHE_MS = 5 * 60 * 1000;
 
-/** Forex News: free, premium, and VIP (any approved non-blocked tier). */
-async function canUseForexNews(ctx: BotContext): Promise<boolean> {
+/** Timers for "10 minutes before" alerts — keyed by event id */
+const preAlertTimers = new Map<string, NodeJS.Timeout>();
+
+/** Full Forex category: Premium / VIP (and owner). Free cannot open the panel. */
+async function canUseForexCategory(ctx: BotContext): Promise<boolean> {
   const userId = ctx.from?.id;
   if (!userId) return false;
   if (isOwner(userId)) return true;
-  return checkAccess(ctx, "free");
+  return checkAccess(ctx, "premium");
 }
 
 function impactEmoji(impact: string): string {
@@ -86,6 +91,10 @@ function eventNairobiDateKey(iso: string): string {
   }
 }
 
+function eventKey(e: CalendarEvent): string {
+  return e.id || `${e.time}|${e.currency}|${e.title}`;
+}
+
 async function fetchShowMyTrades(days: number, impact: Impact): Promise<CalendarEvent[]> {
   const url =
     `https://showmytrades.com/api/public/calendar/v1` +
@@ -103,6 +112,7 @@ async function fetchShowMyTrades(days: number, impact: Impact): Promise<Calendar
       forecast?: string;
       previous?: string;
       actual?: string;
+      id?: string;
     }>;
   };
   return (data.events ?? []).map((e) => ({
@@ -113,6 +123,7 @@ async function fetchShowMyTrades(days: number, impact: Impact): Promise<Calendar
     forecast: e.forecast || undefined,
     previous: e.previous || undefined,
     actual: e.actual || undefined,
+    id: e.id,
   }));
 }
 
@@ -174,7 +185,6 @@ async function loadEvents(mode: "high" | "week"): Promise<CalendarEvent[]> {
   return events;
 }
 
-/** All high+medium events that fall on a Nairobi calendar day. */
 async function loadEventsForNairobiDay(dayKey?: string): Promise<CalendarEvent[]> {
   const key = dayKey ?? nairobiDateKey();
   const all = await loadEvents("week");
@@ -203,7 +213,23 @@ function formatEvents(events: CalendarEvent[], title: string): string {
     `Times: Africa/Nairobi\n` +
     `🔴 High · 🟠 Medium\n\n` +
     lines.join("\n\n") +
-    `\n\nXAU tip: watch high-impact USD (NFP, CPI, FOMC) — gold often reacts hard.`
+    `\n\nXAU tip: watch high-impact USD (NFP, CPI, FOMC).`
+  );
+}
+
+function formatPreAlert(e: CalendarEvent): string {
+  const nums = [
+    e.forecast ? `Forecast: ${e.forecast}` : null,
+    e.previous ? `Previous: ${e.previous}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  return (
+    `⏰ FOREX IN 10 MINUTES\n━━━━━━━━━━━━━━━━━━\n\n` +
+    `${impactEmoji(e.impact)} ${e.currency} — ${e.title}\n` +
+    `🕐 ${fmtNairobi(e.time)} (Nairobi)\n` +
+    (nums ? `${nums}\n` : "") +
+    `\nGet ready — release in ~10 minutes.`
   );
 }
 
@@ -218,21 +244,28 @@ function newsKeyboard(): InlineKeyboard {
     .text("🏠 Menu", "menu:main");
 }
 
+function upgradeKeyboard(): InlineKeyboard {
+  return new InlineKeyboard()
+    .text("💎 Premium / VIP plans", "access:plans")
+    .row()
+    .text("🏠 Menu", "menu:main");
+}
+
 export async function openForexNews(ctx: BotContext): Promise<void> {
-  if (!(await canUseForexNews(ctx))) return;
+  if (!(await canUseForexCategory(ctx))) return;
   await ctx.reply(
     `📰 *FOREX NEWS*\n━━━━━━━━━━━━━━━━━━\n\n` +
-      `Live economic calendar for majors (USD · EUR · GBP · JPY…).\n` +
-      `Open to *Free · Premium · VIP* users.\n` +
-      `Daily push at *00:15 Nairobi* — full calendar for that day.\n` +
-      `Best for XAUUSD: focus on *high-impact USD* releases.\n\n` +
+      `Economic calendar for majors (USD · EUR · GBP · JPY…).\n` +
+      `*Premium · VIP* category access.\n` +
+      `All approved users get *10‑min* release alerts.\n` +
+      `Daily board at *00:15 Nairobi* (Premium/VIP).\n\n` +
       `Pick a view:`,
     { parse_mode: "Markdown", reply_markup: newsKeyboard() },
   );
 }
 
 async function sendCalendar(ctx: BotContext, mode: "high" | "week"): Promise<void> {
-  if (!(await canUseForexNews(ctx))) return;
+  if (!(await canUseForexCategory(ctx))) return;
   const thinking = await ctx.reply("📰 Loading calendar…");
   try {
     const events = await loadEvents(mode);
@@ -254,7 +287,7 @@ async function sendCalendar(ctx: BotContext, mode: "high" | "week"): Promise<voi
 }
 
 async function sendTodayCalendar(ctx: BotContext): Promise<void> {
-  if (!(await canUseForexNews(ctx))) return;
+  if (!(await canUseForexCategory(ctx))) return;
   const thinking = await ctx.reply("📰 Loading today's full calendar…");
   try {
     const label = nairobiWeekdayLabel();
@@ -274,7 +307,8 @@ async function sendTodayCalendar(ctx: BotContext): Promise<void> {
   }
 }
 
-async function listForexNewsRecipients(): Promise<number[]> {
+/** Free + Premium + VIP approved (and owner) — receive 10‑min news alerts. */
+async function listNewsAlertRecipients(): Promise<number[]> {
   const ids = new Set<number>();
   const ownerId = parseInt(process.env["BOT_OWNER_ID"] ?? "0", 10);
   if (ownerId) ids.add(ownerId);
@@ -288,7 +322,30 @@ async function listForexNewsRecipients(): Promise<number[]> {
       if (id) ids.add(id);
     }
   } catch (err) {
-    logger.warn({ err }, "listForexNewsRecipients failed");
+    logger.warn({ err }, "listNewsAlertRecipients failed");
+  }
+  return [...ids];
+}
+
+/** Premium + VIP (+ owner) — daily full board. */
+async function listPremiumForexRecipients(): Promise<number[]> {
+  const ids = new Set<number>();
+  const ownerId = parseInt(process.env["BOT_OWNER_ID"] ?? "0", 10);
+  if (ownerId) ids.add(ownerId);
+  try {
+    const rows = await db
+      .select({ userId: accessTable.userId, tier: accessTable.tier })
+      .from(accessTable)
+      .where(and(eq(accessTable.isApproved, true), ne(accessTable.tier, "blocked")));
+    for (const r of rows) {
+      const tier = (r.tier ?? "").toLowerCase();
+      if (tier === "premium" || tier === "vip") {
+        const id = Number(r.userId);
+        if (id) ids.add(id);
+      }
+    }
+  } catch (err) {
+    logger.warn({ err }, "listPremiumForexRecipients failed");
   }
   return [...ids];
 }
@@ -317,28 +374,88 @@ function msUntilNextNairobiTime(hour: number, minute = 0): number {
   return targetNairobiAsUtc - nowNairobiAsUtc;
 }
 
-/** Send this Nairobi day's full forex calendar to one user. */
 export async function sendDailyForexNews(userId: number, bot: MyBot): Promise<void> {
   const label = nairobiWeekdayLabel();
   const events = await loadEventsForNairobiDay(nairobiDateKey());
   if (events.length === 0) {
     await bot.api.sendMessage(
       userId,
-      `📰 FOREX NEWS — ${label}\n━━━━━━━━━━━━━━━━━━\n\nQuiet calendar today (Africa/Nairobi).\nNo high/medium releases listed for this day.\n\n/fxnews for live views.`,
+      `📰 FOREX NEWS — ${label}\n━━━━━━━━━━━━━━━━━━\n\nQuiet calendar today (Africa/Nairobi).\nNo high/medium releases listed.\n\n10‑min alerts still fire if events appear.`,
     );
     return;
   }
   const title = `📰 FOREX NEWS — ${label}`;
   let text = formatEvents(events, title);
-  text += `\n\nFull day · Africa/Nairobi · Free · Premium · VIP`;
+  text += `\n\nFull day · Premium/VIP board · 10‑min alerts on for all tiers`;
   if (text.length > 3900) text = text.slice(0, 3890) + "\n…";
   await bot.api.sendMessage(userId, text);
 }
 
+async function broadcastPreAlert(bot: MyBot, e: CalendarEvent): Promise<void> {
+  const text = formatPreAlert(e);
+  const recipients = await listNewsAlertRecipients();
+  logger.info({ title: e.title, currency: e.currency, count: recipients.length }, "Forex 10‑min alert");
+  for (const userId of recipients) {
+    try {
+      await bot.api.sendMessage(userId, text);
+      await new Promise((r) => setTimeout(r, 60));
+    } catch (err) {
+      logger.warn({ err, userId }, "forex pre-alert send failed");
+    }
+  }
+}
+
 /**
- * At 00:15 Africa/Nairobi every day, push that full day's economic calendar
- * to every approved user (Free / Premium / VIP).
- * Example: Monday 00:15 → all Monday events for the whole day.
+ * Schedule a 10‑minute warning for every high/medium event still ahead today.
+ * Safe to call multiple times — skips events already armed.
+ */
+async function armTenMinuteAlerts(bot: MyBot): Promise<void> {
+  let events: CalendarEvent[] = [];
+  try {
+    events = await loadEventsForNairobiDay(nairobiDateKey());
+  } catch (err) {
+    logger.error({ err }, "armTenMinuteAlerts: load failed");
+    return;
+  }
+
+  const now = Date.now();
+  const TEN_MIN = 10 * 60 * 1000;
+  let armed = 0;
+
+  for (const e of events) {
+    const impact = e.impact.toLowerCase();
+    if (impact !== "high" && impact !== "medium") continue;
+
+    const at = new Date(e.time).getTime();
+    if (!Number.isFinite(at)) continue;
+
+    const fireAt = at - TEN_MIN;
+    const key = eventKey(e);
+
+    if (preAlertTimers.has(key)) continue;
+    if (fireAt <= now) continue;
+
+    const delay = fireAt - now;
+    if (delay > 36 * 60 * 60 * 1000) continue;
+
+    const timer = setTimeout(() => {
+      preAlertTimers.delete(key);
+      broadcastPreAlert(bot, e).catch((err) =>
+        logger.error({ err, key }, "broadcastPreAlert failed"),
+      );
+    }, delay);
+
+    preAlertTimers.set(key, timer);
+    armed++;
+  }
+
+  logger.info({ armed, totalToday: events.length }, "Forex 10‑min alerts armed");
+}
+
+/**
+ * 00:15 Nairobi:
+ *  - Premium/VIP: full day board
+ *  - All approved: re-arm 10‑min alerts for the new day
  */
 export function startForexNewsDailyScheduler(bot: MyBot): void {
   const HOUR = 0;
@@ -348,10 +465,14 @@ export function startForexNewsDailyScheduler(bot: MyBot): void {
     const delay = msUntilNextNairobiTime(HOUR, MINUTE);
     setTimeout(async () => {
       try {
-        const recipients = await listForexNewsRecipients();
-        const dayKey = nairobiDateKey();
-        logger.info({ count: recipients.length, dayKey }, "Sending daily Forex News (Nairobi day)");
-        for (const userId of recipients) {
+        for (const [k, t] of preAlertTimers) {
+          clearTimeout(t);
+          preAlertTimers.delete(k);
+        }
+
+        const premiumRecipients = await listPremiumForexRecipients();
+        logger.info({ count: premiumRecipients.length }, "Sending daily Forex board (Premium/VIP)");
+        for (const userId of premiumRecipients) {
           try {
             await sendDailyForexNews(userId, bot);
             await new Promise((r) => setTimeout(r, 80));
@@ -359,6 +480,8 @@ export function startForexNewsDailyScheduler(bot: MyBot): void {
             logger.error({ err, userId }, "daily forex news send failed");
           }
         }
+
+        await armTenMinuteAlerts(bot);
       } catch (err) {
         logger.error({ err }, "forex news daily scheduler tick failed");
       }
@@ -368,6 +491,12 @@ export function startForexNewsDailyScheduler(bot: MyBot): void {
   }
 
   scheduleNext();
+
+  armTenMinuteAlerts(bot).catch((err) => logger.error({ err }, "boot armTenMinuteAlerts failed"));
+
+  setInterval(() => {
+    armTenMinuteAlerts(bot).catch((err) => logger.error({ err }, "refresh armTenMinuteAlerts failed"));
+  }, 30 * 60 * 1000);
 }
 
 export function registerForexNewsHandlers(bot: MyBot): void {
@@ -395,6 +524,21 @@ export function registerForexNewsHandlers(bot: MyBot): void {
   });
   bot.callbackQuery("menu:fxnews", async (ctx) => {
     await ctx.answerCallbackQuery();
+    const userId = ctx.from?.id;
+    if (userId && !isOwner(userId)) {
+      const ok = await checkAccess(ctx, "premium");
+      if (!ok) {
+        await ctx
+          .reply(
+            `📰 *Forex category* is *Premium / VIP*.\n\n` +
+              `As Free you still get *automatic 10‑minute* release alerts.\n` +
+              `Upgrade to open the full calendar panel.`,
+            { parse_mode: "Markdown", reply_markup: upgradeKeyboard() },
+          )
+          .catch(() => {});
+        return;
+      }
+    }
     await openForexNews(ctx);
   });
 }
