@@ -8,6 +8,7 @@ import type { BotContext } from "../context";
 import { isOwner } from "../helpers";
 import { getAccess, TIER_LABEL, TIER_EMOJI } from "./access";
 import { logger } from "../../lib/logger";
+import { registerTradingSessionHandlers } from "./trading-sessions";
 
 const STRATEGY_BLUEPRINT = `🥇 *XAUUSD Volume Profile Strategy*
 ━━━━━━━━━━━━━━━━━━
@@ -84,9 +85,11 @@ function lockedKeyboard(): InlineKeyboard {
 function tradingKeyboard(opts: { owner?: boolean }): InlineKeyboard {
   const kb = new InlineKeyboard()
     .text("📘 Strategy", "trading:strategy")
-    .text("📝 New journal", "trading:new_journal")
+    .text("⏰ My alerts", "trading:sessions")
     .row()
+    .text("📝 New journal", "trading:new_journal")
     .text("📚 My journals", "trading:list")
+    .row()
     .text("🔔 Insights", "trading:insights")
     .row();
   if (opts.owner) {
@@ -267,6 +270,7 @@ async function optIn(ctx: BotContext, bot: MyBot): Promise<void> {
 }
 
 export function registerTradingHandlers(bot: MyBot): void {
+  registerTradingSessionHandlers(bot);
   bot.command("trading", async (ctx) => {
     await openTradingPanel(ctx);
   });
@@ -346,7 +350,7 @@ export function registerTradingHandlers(bot: MyBot): void {
         `Focus: FRVP on previous full day → extend POC/VAH/VAL.\n` +
         `Setups: POC bounce · VA reversal · Breakout only.\n\n` +
         `Journal every trade with /journal so you can review R and rule breaks.\n` +
-        `Owner session pings stay private to the owner; your desk is strategy + journal.`,
+        `Set your own session alerts with /sessions — times and strategy are yours.`,
       {
         parse_mode: "Markdown",
         reply_markup: tradingKeyboard({ owner: isOwner(userId) }),
