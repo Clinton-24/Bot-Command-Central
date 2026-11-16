@@ -277,6 +277,35 @@ export async function runMigrations(): Promise<void> {
       CREATE INDEX IF NOT EXISTS trading_journals_user_id_idx ON trading_journals (user_id);
     `);
 
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS trading_strategies (
+        user_id BIGINT PRIMARY KEY,
+        strategy_text TEXT NOT NULL DEFAULT '',
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS trading_user_alerts (
+        id SERIAL PRIMARY KEY,
+        user_id BIGINT NOT NULL,
+        hour INTEGER NOT NULL CHECK (hour >= 0 AND hour <= 23),
+        minute INTEGER NOT NULL CHECK (minute >= 0 AND minute <= 59),
+        title TEXT NOT NULL,
+        body TEXT NOT NULL DEFAULT '',
+        enabled BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS trading_user_alerts_user_idx ON trading_user_alerts (user_id);
+    `);
+
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS trading_user_alerts_time_idx ON trading_user_alerts (hour, minute) WHERE enabled = TRUE;
+    `);
+
     logger.info("Migrations complete ✅");
   } catch (err) {
     logger.error({ err }, "Migration failed ❌");
