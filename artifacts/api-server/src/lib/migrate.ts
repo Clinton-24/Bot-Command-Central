@@ -306,6 +306,89 @@ export async function runMigrations(): Promise<void> {
       CREATE INDEX IF NOT EXISTS trading_user_alerts_time_idx ON trading_user_alerts (hour, minute) WHERE enabled = TRUE;
     `);
 
+    // Align tier_subscriptions + payment_settings with app schema (idempotent)
+    await client.query(`
+      ALTER TABLE tier_subscriptions ADD COLUMN IF NOT EXISTS coin TEXT;
+      ALTER TABLE tier_subscriptions ADD COLUMN IF NOT EXISTS address TEXT;
+      ALTER TABLE tier_subscriptions ADD COLUMN IF NOT EXISTS reference TEXT;
+      ALTER TABLE tier_subscriptions ADD COLUMN IF NOT EXISTS confirmed_at TIMESTAMP;
+      ALTER TABLE tier_subscriptions ADD COLUMN IF NOT EXISTS claimed_at TIMESTAMP;
+      ALTER TABLE tier_subscriptions ADD COLUMN IF NOT EXISTS starts_at TIMESTAMP;
+      ALTER TABLE tier_subscriptions ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP;
+      ALTER TABLE tier_subscriptions ADD COLUMN IF NOT EXISTS invoice_id INTEGER;
+      ALTER TABLE tier_subscriptions ADD COLUMN IF NOT EXISTS amount NUMERIC(10, 2);
+      ALTER TABLE tier_subscriptions ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending';
+    `);
+    // Backfill from legacy "asset" column if present
+    await client.query(`
+      DO $$ BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'tier_subscriptions' AND column_name = 'asset'
+        ) THEN
+          UPDATE tier_subscriptions SET coin = COALESCE(coin, asset) WHERE coin IS NULL;
+        END IF;
+      END $$;
+    `);
+    await client.query(`
+      UPDATE tier_subscriptions SET coin = COALESCE(coin, 'UNKNOWN') WHERE coin IS NULL;
+      UPDATE tier_subscriptions SET address = COALESCE(address, '') WHERE address IS NULL;
+      UPDATE tier_subscriptions
+        SET reference = COALESCE(reference, 'LEGACY-' || id::text)
+        WHERE reference IS NULL;
+    `);
+    // Unique reference if missing (ignore if already exists)
+    await client.query(`
+      DO $$ BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'tier_subscriptions_reference_key'
+        ) THEN
+          BEGIN
+            ALTER TABLE tier_subscriptions ADD CONSTRAINT tier_subscriptions_reference_key UNIQUE (reference);
+          EXCEPTION WHEN others THEN NULL;
+          END;
+        END IF;
+      END $$;
+    `);
+
+    // payment_settings: app expects owner wallets, not key/value store
+    await client.query(`
+      DO $$ BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'payment_settings' AND column_name = 'key'
+        ) AND NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+          WHERE table_schema = 'public' AND table_name = 'payment_settings' AND column_name = 'owner_id'
+        ) THEN
+          ALTER TABLE payment_settings RENAME TO payment_settings_kv_legacy;
+        END IF;
+      END $$;
+    `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS payment_settings (
+        id SERIAL PRIMARY KEY,
+        owner_id BIGINT NOT NULL UNIQUE,
+        bnb_address TEXT,
+        trc20_address TEXT,
+        btc_address TEXT,
+        eth_address TEXT,
+        bnb_xpub TEXT,
+        address_index INTEGER NOT NULL DEFAULT 0,
+        updated_at TIMESTAMP NOT NULL DEFAULT NOW()
+      );
+    `);
+    await client.query(`
+      ALTER TABLE payment_settings ADD COLUMN IF NOT EXISTS owner_id BIGINT;
+      ALTER TABLE payment_settings ADD COLUMN IF NOT EXISTS bnb_address TEXT;
+      ALTER TABLE payment_settings ADD COLUMN IF NOT EXISTS trc20_address TEXT;
+      ALTER TABLE payment_settings ADD COLUMN IF NOT EXISTS btc_address TEXT;
+      ALTER TABLE payment_settings ADD COLUMN IF NOT EXISTS eth_address TEXT;
+      ALTER TABLE payment_settings ADD COLUMN IF NOT EXISTS bnb_xpub TEXT;
+      ALTER TABLE payment_settings ADD COLUMN IF NOT EXISTS address_index INTEGER DEFAULT 0;
+      ALTER TABLE payment_settings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW();
+    `);
+
     logger.info("Migrations complete ✅");
   } catch (err) {
     logger.error({ err }, "Migration failed ❌");
