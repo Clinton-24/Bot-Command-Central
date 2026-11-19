@@ -97,3 +97,5 @@ export async function checkAccess(
     return false;
   }
 }
+
+export * from "./access-body";
